@@ -221,7 +221,7 @@ InitGeomData( size_t size, uint32_t primCount, BoxNode* boxNodes, void* primNode
 	InitGeomDataImpl( index, primCount, size, boxNodes, primNodes, geomType, geomHeader );
 }
 
-template <typename InstanceList>
+template <typename InstanceList, bool ConvertToFrame = true>
 __device__ void InitSceneData(
 	uint32_t	  index,
 	size_t		  size,
@@ -229,7 +229,7 @@ __device__ void InitSceneData(
 	BoxNode*	  boxNodes,
 	InstanceNode* primNodes,
 	Instance*	  instances,
-	Frame*		  frames,
+	void*		  frames,
 	SceneHeader*  sceneHeader )
 {
 	if ( index < instanceList.getCount() )
@@ -247,7 +247,11 @@ __device__ void InitSceneData(
 		instances[index] = instance;
 	}
 
-	if ( index < instanceList.getFrameCount() ) instanceList.convertFrame( index );
+	// Only convert if ConvertToFrame is true (legacy Frame storage)
+	if constexpr ( ConvertToFrame )
+	{
+		if ( index < instanceList.getFrameCount() ) instanceList.convertFrame( index );
+	}
 
 	if ( index == 0 )
 	{
@@ -261,10 +265,12 @@ __device__ void InitSceneData(
 		sceneHeader->m_primNodeCount  = instanceList.getCount() == 1u ? 1u : 0u;
 		sceneHeader->m_boxNodeCount	  = 1u;
 		sceneHeader->m_frameCount	  = instanceList.getFrameCount();
+		sceneHeader->m_frameFormat	  = ConvertToFrame ? 0u : 1u; // 0 = Frame, 1 = MatrixFrame
 		sceneHeader->m_rtip			  = Rtip;
 	}
 }
 
+// Legacy kernels: convert API frames to internal Frame representation
 extern "C" __global__ void InitSceneData_InstanceList_SRTFrame(
 	size_t				   size,
 	InstanceList<SRTFrame> instanceList,
@@ -275,7 +281,7 @@ extern "C" __global__ void InitSceneData_InstanceList_SRTFrame(
 	SceneHeader*		   sceneHeader )
 {
 	const uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
-	InitSceneData<InstanceList<SRTFrame>>( index, size, instanceList, boxNodes, primNodes, instances, frames, sceneHeader );
+	InitSceneData<InstanceList<SRTFrame>, true>( index, size, instanceList, boxNodes, primNodes, instances, frames, sceneHeader );
 }
 
 extern "C" __global__ void InitSceneData_InstanceList_MatrixFrame(
@@ -288,7 +294,28 @@ extern "C" __global__ void InitSceneData_InstanceList_MatrixFrame(
 	SceneHeader*			  sceneHeader )
 {
 	uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
-	InitSceneData<InstanceList<MatrixFrame>>( index, size, instanceList, boxNodes, primNodes, instances, frames, sceneHeader );
+	InitSceneData<InstanceList<MatrixFrame>, true>( index, size, instanceList, boxNodes, primNodes, instances, frames, sceneHeader );
+}
+
+// New kernel: store MatrixFrame directly without conversion
+extern "C" __global__ void InitSceneData_InstanceList_MatrixFrame_Direct(
+	size_t					  size,
+	InstanceList<MatrixFrame> instanceList,
+	BoxNode*				  boxNodes,
+	InstanceNode*			  primNodes,
+	Instance*				  instances,
+	MatrixFrame*			  frames,
+	SceneHeader*			  sceneHeader )
+{
+	uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+	
+	// Copy MatrixFrame data directly without conversion
+	if ( index < instanceList.getFrameCount() )
+	{
+		frames[index] = instanceList.getApiFrames()[index];
+	}
+	
+	InitSceneData<InstanceList<MatrixFrame>, false>( index, size, instanceList, boxNodes, primNodes, instances, frames, sceneHeader );
 }
 
 template <typename PrimitiveContainer, typename PrimitiveNode>

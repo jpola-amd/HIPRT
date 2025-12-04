@@ -104,7 +104,7 @@ class InstanceList
 	HIPRT_DEVICE Aabb fetchAabb( const uint32_t index ) const
 	{
 		const hiprtTransformHeader header = fetchTransformHeader( index );
-		const Transform			   t( m_frames, header.frameIndex, header.frameCount );
+		const Transform			   t( static_cast<Frame*>( m_frames ), header.frameIndex, header.frameCount );
 		const hiprtInstance		   instance = fetchInstance( index );
 		const BoxNode*			   boxNodes = instance.type == hiprtInstanceTypeScene
 												  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
@@ -126,7 +126,7 @@ class InstanceList
 		const uint32_t index, const uint32_t axis, const float position, const Aabb& box, Aabb& leftBox, Aabb& rightBox ) const
 	{
 		const hiprtTransformHeader header = fetchTransformHeader( index );
-		const Transform			   t( m_frames, header.frameIndex, header.frameCount );
+		const Transform			   t( static_cast<Frame*>( m_frames ), header.frameIndex, header.frameCount );
 		const hiprtInstance		   instance = fetchInstance( index );
 		const BoxNode*			   boxNodes = instance.type == hiprtInstanceTypeScene
 												  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
@@ -167,7 +167,7 @@ class InstanceList
 	HIPRT_DEVICE Obb fetchObb( const uint32_t index, const uint32_t matrixIndex, const Aabb& box ) const
 	{
 		const hiprtTransformHeader header = fetchTransformHeader( index );
-		const Transform			   t( m_frames, header.frameIndex, header.frameCount );
+		const Transform			   t( static_cast<Frame*>( m_frames ), header.frameIndex, header.frameCount );
 		const hiprtInstance		   instance = fetchInstance( index );
 		const BoxNode*			   boxNodes = instance.type == hiprtInstanceTypeScene
 												  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
@@ -201,15 +201,24 @@ class InstanceList
 		return m_transformHeaders[index];
 	}
 
-	HIPRT_HOST_DEVICE Frame fetchFrame( const uint32_t index ) const
+	HIPRT_DEVICE Frame fetchFrame( const uint32_t index ) const
 	{
 		if ( m_frameCount == 0 || m_apiFrames == nullptr || m_frames == nullptr ) return Frame();
-		return m_frames[index];
+		return static_cast<Frame*>( m_frames )[index];
 	}
 
-	HIPRT_HOST_DEVICE void convertFrame( const uint32_t index )
+	HIPRT_DEVICE void convertFrame( const uint32_t index ) const
 	{
-		if ( m_frameCount > 0 && m_apiFrames != nullptr && m_frames != nullptr ) m_frames[index] = m_apiFrames[index].convert();
+		if ( m_frameCount > 0 && m_apiFrames != nullptr && m_frames != nullptr ) static_cast<Frame*>( m_frames )[index] = m_apiFrames[index].convert();
+	}
+
+	HIPRT_HOST_DEVICE void copyFrameDirect( const uint32_t index, void* outFrames ) const
+	{
+		if ( m_frameCount > 0 && m_apiFrames != nullptr && outFrames != nullptr )
+		{
+			// Direct copy without conversion
+			reinterpret_cast<ApiFrame*>( outFrames )[index] = m_apiFrames[index];
+		}
 	}
 
 	HIPRT_HOST_DEVICE bool copyInvTransformMatrix( const uint32_t index, float ( &matrix )[3][4] ) const
@@ -222,12 +231,14 @@ class InstanceList
 
 	HIPRT_HOST_DEVICE uint32_t getFrameCount() const { return m_frameCount; }
 
-	HIPRT_HOST_DEVICE void setFrames( Frame* frames ) { m_frames = frames; }
+	HIPRT_HOST_DEVICE void setFrames( void* frames ) { m_frames = frames; }
+
+	HIPRT_HOST_DEVICE ApiFrame* getApiFrames() const { return m_apiFrames; }
 
   private:
 	hiprtInstance*		  m_instances;
 	hiprtTransformHeader* m_transformHeaders;
-	Frame*				  m_frames = nullptr;
+	void*				  m_frames = nullptr;
 	ApiFrame*			  m_apiFrames;
 	uint32_t*			  m_masks;
 	uint32_t			  m_instanceCount;

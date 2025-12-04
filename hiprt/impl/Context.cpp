@@ -664,7 +664,10 @@ std::vector<hiprtScene> Context::compactScenes( const std::vector<hiprtScene>& s
 		void*	  boxNodes	= storageMemoryArena.allocate<uint8_t>( getBoxNodeSize() * header.m_boxNodeCount );
 		void*	  primNodes = storageMemoryArena.allocate<uint8_t>( getInstanceNodeSize() * header.m_primNodeCount );
 		Instance* instances = storageMemoryArena.allocate<Instance>( header.m_primCount );
-		Frame*	  frames	= storageMemoryArena.allocate<Frame>( header.m_frameCount );
+		
+		// Allocate frames based on format (Frame or MatrixFrame)
+		const size_t frameSize = ( header.m_frameFormat == 0 ) ? sizeof( Frame ) : sizeof( MatrixFrame );
+		void* frames = storageMemoryArena.allocate<uint8_t>( frameSize * header.m_frameCount );
 
 		checkOro( oroMemcpyDtoDAsync(
 			reinterpret_cast<oroDeviceptr>( boxNodes ),
@@ -687,13 +690,14 @@ std::vector<hiprtScene> Context::compactScenes( const std::vector<hiprtScene>& s
 		checkOro( oroMemcpyDtoDAsync(
 			reinterpret_cast<oroDeviceptr>( frames ),
 			reinterpret_cast<oroDeviceptr>( header.m_frames ),
-			sizeof( Frame ) * header.m_frameCount,
+			frameSize * header.m_frameCount,
 			stream ) );
 
 		header.m_boxNodes  = boxNodes;
 		header.m_primNodes = primNodes;
 		header.m_instances = instances;
 		header.m_frames	   = frames;
+		// m_frameFormat is preserved from original header
 		checkOro(
 			oroMemcpyHtoDAsync( reinterpret_cast<oroDeviceptr>( scenesOut[i] ), &header, sizeof( SceneHeader ), stream ) );
 

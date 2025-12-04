@@ -57,13 +57,14 @@ struct SceneHeader
 	void* m_primNodes;
 #endif
 	Instance* m_instances;
-	Frame*	  m_frames;
+	void*	  m_frames;		 // Frame* or MatrixFrame* depending on m_frameFormat
 	size_t	  m_size;
 	uint32_t  m_referenceCount;
 	uint32_t  m_primCount;
 	uint32_t  m_primNodeCount;
 	uint32_t  m_boxNodeCount;
 	uint32_t  m_frameCount;
+	uint32_t  m_frameFormat; // 0 = Frame, 1 = MatrixFrame
 	uint32_t  m_rtip;
 };
 HIPRT_STATIC_ASSERT( alignof( SceneHeader ) <= DefaultAlignment );

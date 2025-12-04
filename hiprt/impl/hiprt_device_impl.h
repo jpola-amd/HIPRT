@@ -920,7 +920,7 @@ class SceneTraversal : public TraversalBase<Stack, TraversalType>
 	InstanceStack& m_instanceStack;
 	SceneHeader*   m_scene;
 	InstanceNode*  m_instanceNodes;
-	Frame*		   m_frames;
+	void*		   m_frames;
 	hiprtRayMask   m_mask;
 	uint32_t	   m_level;
 	uint32_t	   m_instanceIndex;
@@ -988,8 +988,17 @@ HIPRT_DEVICE bool SceneTraversal<Stack, InstanceStack, TraversalType>::transform
 		}
 		else
 		{
-			Transform tr( m_frames, instanceNode.m_transform.frameIndex, instanceNode.m_transform.frameCount );
-			ray = tr.transformRay( ray, m_time );
+			// Runtime dispatch based on frame format
+			if ( m_scene->m_frameFormat == 0 )
+			{
+				Transform<Frame> tr( static_cast<const Frame*>( m_frames ), instanceNode.m_transform.frameIndex, instanceNode.m_transform.frameCount );
+				ray = tr.transformRay( ray, m_time );
+			}
+			else
+			{
+				Transform<MatrixFrame> tr( static_cast<const MatrixFrame*>( m_frames ), instanceNode.m_transform.frameIndex, instanceNode.m_transform.frameCount );
+				ray = tr.transformRay( ray, m_time );
+			}
 		}
 		if constexpr ( Rtip < 31 ) invD = rcp( ray.direction );
 	}
@@ -1776,11 +1785,23 @@ HIPRT_DEVICE hiprtTraversalState hiprtSceneTraversalAnyHitCustomStack<hiprtStack
 HIPRT_DEVICE hiprtFrameSRT hiprtGetObjectToWorldFrameSRT( hiprtScene scene, uint32_t instanceID, float time )
 {
 	hiprt::SceneHeader* sceneHeader = reinterpret_cast<hiprt::SceneHeader*>( scene );
-	hiprt::Transform	tr(
-		   sceneHeader->m_frames,
-		   sceneHeader->m_instances[instanceID].m_frameIndex,
-		   sceneHeader->m_instances[instanceID].m_frameCount );
-	hiprt::Frame	frame	 = tr.interpolateFrames( time );
+	hiprt::Frame frame;
+	if ( sceneHeader->m_frameFormat == 0 )
+	{
+		hiprt::Transform<hiprt::Frame> tr(
+			static_cast<const hiprt::Frame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceID].m_frameIndex,
+			sceneHeader->m_instances[instanceID].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
+	else
+	{
+		hiprt::Transform<hiprt::MatrixFrame> tr(
+			static_cast<const hiprt::MatrixFrame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceID].m_frameIndex,
+			sceneHeader->m_instances[instanceID].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
 	hiprt::SRTFrame srtFrame = hiprt::SRTFrame::getSRTFrame( frame );
 	return *reinterpret_cast<hiprtFrameSRT*>( &srtFrame );
 }
@@ -1788,11 +1809,23 @@ HIPRT_DEVICE hiprtFrameSRT hiprtGetObjectToWorldFrameSRT( hiprtScene scene, uint
 HIPRT_DEVICE hiprtFrameSRT hiprtGetWorldToObjectFrameSRT( hiprtScene scene, uint32_t instanceID, float time )
 {
 	hiprt::SceneHeader* sceneHeader = reinterpret_cast<hiprt::SceneHeader*>( scene );
-	hiprt::Transform	tr(
-		   sceneHeader->m_frames,
-		   sceneHeader->m_instances[instanceID].m_frameIndex,
-		   sceneHeader->m_instances[instanceID].m_frameCount );
-	hiprt::Frame	frame	 = tr.interpolateFrames( time );
+	hiprt::Frame frame;
+	if ( sceneHeader->m_frameFormat == 0 )
+	{
+		hiprt::Transform<hiprt::Frame> tr(
+			static_cast<const hiprt::Frame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceID].m_frameIndex,
+			sceneHeader->m_instances[instanceID].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
+	else
+	{
+		hiprt::Transform<hiprt::MatrixFrame> tr(
+			static_cast<const hiprt::MatrixFrame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceID].m_frameIndex,
+			sceneHeader->m_instances[instanceID].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
 	hiprt::SRTFrame srtFrame = hiprt::SRTFrame::getSRTFrameInv( frame );
 	return *reinterpret_cast<hiprtFrameSRT*>( &srtFrame );
 }
@@ -1800,11 +1833,23 @@ HIPRT_DEVICE hiprtFrameSRT hiprtGetWorldToObjectFrameSRT( hiprtScene scene, uint
 HIPRT_DEVICE hiprtFrameMatrix hiprtGetObjectToWorldFrameMatrix( hiprtScene scene, uint32_t instanceID, float time )
 {
 	hiprt::SceneHeader* sceneHeader = reinterpret_cast<hiprt::SceneHeader*>( scene );
-	hiprt::Transform	tr(
-		   sceneHeader->m_frames,
-		   sceneHeader->m_instances[instanceID].m_frameIndex,
-		   sceneHeader->m_instances[instanceID].m_frameCount );
-	hiprt::Frame	   frame	   = tr.interpolateFrames( time );
+	hiprt::Frame frame;
+	if ( sceneHeader->m_frameFormat == 0 )
+	{
+		hiprt::Transform<hiprt::Frame> tr(
+			static_cast<const hiprt::Frame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceID].m_frameIndex,
+			sceneHeader->m_instances[instanceID].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
+	else
+	{
+		hiprt::Transform<hiprt::MatrixFrame> tr(
+			static_cast<const hiprt::MatrixFrame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceID].m_frameIndex,
+			sceneHeader->m_instances[instanceID].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
 	hiprt::MatrixFrame matrixFrame = hiprt::MatrixFrame::getMatrixFrame( frame );
 	return *reinterpret_cast<hiprtFrameMatrix*>( &matrixFrame );
 }
@@ -1812,11 +1857,23 @@ HIPRT_DEVICE hiprtFrameMatrix hiprtGetObjectToWorldFrameMatrix( hiprtScene scene
 HIPRT_DEVICE hiprtFrameMatrix hiprtGetWorldToObjectFrameMatrix( hiprtScene scene, uint32_t instanceID, float time )
 {
 	hiprt::SceneHeader* sceneHeader = reinterpret_cast<hiprt::SceneHeader*>( scene );
-	hiprt::Transform	tr(
-		   sceneHeader->m_frames,
-		   sceneHeader->m_instances[instanceID].m_frameIndex,
-		   sceneHeader->m_instances[instanceID].m_frameCount );
-	hiprt::Frame	   frame	   = tr.interpolateFrames( time );
+	hiprt::Frame frame;
+	if ( sceneHeader->m_frameFormat == 0 )
+	{
+		hiprt::Transform<hiprt::Frame> tr(
+			static_cast<const hiprt::Frame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceID].m_frameIndex,
+			sceneHeader->m_instances[instanceID].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
+	else
+	{
+		hiprt::Transform<hiprt::MatrixFrame> tr(
+			static_cast<const hiprt::MatrixFrame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceID].m_frameIndex,
+			sceneHeader->m_instances[instanceID].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
 	hiprt::MatrixFrame matrixFrame = hiprt::MatrixFrame::getMatrixFrameInv( frame );
 	return *reinterpret_cast<hiprtFrameMatrix*>( &matrixFrame );
 }
@@ -1880,21 +1937,44 @@ HIPRT_DEVICE hiprtFrameMatrix
 hiprtGetObjectToWorldFrameMatrix( hiprtScene scene, const uint32_t ( &instanceIDs )[hiprtMaxInstanceLevels], float time )
 {
 	hiprt::SceneHeader* sceneHeader = reinterpret_cast<hiprt::SceneHeader*>( scene );
-	hiprt::Transform	tr(
-		   sceneHeader->m_frames,
-		   sceneHeader->m_instances[instanceIDs[0]].m_frameIndex,
-		   sceneHeader->m_instances[instanceIDs[0]].m_frameCount );
-	hiprt::Frame	   frame	   = tr.interpolateFrames( time );
+	hiprt::Frame frame;
+	if ( sceneHeader->m_frameFormat == 0 )
+	{
+		hiprt::Transform<hiprt::Frame> tr(
+			static_cast<const hiprt::Frame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceIDs[0]].m_frameIndex,
+			sceneHeader->m_instances[instanceIDs[0]].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
+	else
+	{
+		hiprt::Transform<hiprt::MatrixFrame> tr(
+			static_cast<const hiprt::MatrixFrame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceIDs[0]].m_frameIndex,
+			sceneHeader->m_instances[instanceIDs[0]].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
 	hiprt::MatrixFrame matrixFrame = hiprt::MatrixFrame::getMatrixFrame( frame );
 	for ( uint32_t i = 1; i < hiprtMaxInstanceLevels; ++i )
 	{
 		if ( sceneHeader->m_instances[instanceIDs[i - 1]].m_type != hiprtInstanceTypeScene ) break;
 		sceneHeader = sceneHeader->m_instances[instanceIDs[i - 1]].m_scene;
-		tr			= hiprt::Transform(
-			 sceneHeader->m_frames,
-			 sceneHeader->m_instances[instanceIDs[i]].m_frameIndex,
-			 sceneHeader->m_instances[instanceIDs[i]].m_frameCount );
-		frame		= tr.interpolateFrames( time );
+		if ( sceneHeader->m_frameFormat == 0 )
+		{
+			hiprt::Transform<hiprt::Frame> tr(
+				static_cast<const hiprt::Frame*>( sceneHeader->m_frames ),
+				sceneHeader->m_instances[instanceIDs[i]].m_frameIndex,
+				sceneHeader->m_instances[instanceIDs[i]].m_frameCount );
+			frame = tr.interpolateFrames( time );
+		}
+		else
+		{
+			hiprt::Transform<hiprt::MatrixFrame> tr(
+				static_cast<const hiprt::MatrixFrame*>( sceneHeader->m_frames ),
+				sceneHeader->m_instances[instanceIDs[i]].m_frameIndex,
+				sceneHeader->m_instances[instanceIDs[i]].m_frameCount );
+			frame = tr.interpolateFrames( time );
+		}
 		matrixFrame = hiprt::MatrixFrame::multiply( matrixFrame, hiprt::MatrixFrame::getMatrixFrame( frame ) );
 	}
 	return *reinterpret_cast<hiprtFrameMatrix*>( &matrixFrame );
@@ -1904,21 +1984,44 @@ HIPRT_DEVICE hiprtFrameMatrix
 hiprtGetWorldToObjectFrameMatrix( hiprtScene scene, const uint32_t ( &instanceIDs )[hiprtMaxInstanceLevels], float time )
 {
 	hiprt::SceneHeader* sceneHeader = reinterpret_cast<hiprt::SceneHeader*>( scene );
-	hiprt::Transform	tr(
-		   sceneHeader->m_frames,
-		   sceneHeader->m_instances[instanceIDs[0]].m_frameIndex,
-		   sceneHeader->m_instances[instanceIDs[0]].m_frameCount );
-	hiprt::Frame	   frame	   = tr.interpolateFrames( time );
+	hiprt::Frame frame;
+	if ( sceneHeader->m_frameFormat == 0 )
+	{
+		hiprt::Transform<hiprt::Frame> tr(
+			static_cast<const hiprt::Frame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceIDs[0]].m_frameIndex,
+			sceneHeader->m_instances[instanceIDs[0]].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
+	else
+	{
+		hiprt::Transform<hiprt::MatrixFrame> tr(
+			static_cast<const hiprt::MatrixFrame*>( sceneHeader->m_frames ),
+			sceneHeader->m_instances[instanceIDs[0]].m_frameIndex,
+			sceneHeader->m_instances[instanceIDs[0]].m_frameCount );
+		frame = tr.interpolateFrames( time );
+	}
 	hiprt::MatrixFrame matrixFrame = hiprt::MatrixFrame::getMatrixFrameInv( frame );
 	for ( uint32_t i = 1; i < hiprtMaxInstanceLevels; ++i )
 	{
 		if ( sceneHeader->m_instances[instanceIDs[i - 1]].m_type != hiprtInstanceTypeScene ) break;
 		sceneHeader = sceneHeader->m_instances[instanceIDs[i - 1]].m_scene;
-		tr			= hiprt::Transform(
-			 sceneHeader->m_frames,
-			 sceneHeader->m_instances[instanceIDs[i]].m_frameIndex,
-			 sceneHeader->m_instances[instanceIDs[i]].m_frameCount );
-		frame		= tr.interpolateFrames( time );
+		if ( sceneHeader->m_frameFormat == 0 )
+		{
+			hiprt::Transform<hiprt::Frame> tr(
+				static_cast<const hiprt::Frame*>( sceneHeader->m_frames ),
+				sceneHeader->m_instances[instanceIDs[i]].m_frameIndex,
+				sceneHeader->m_instances[instanceIDs[i]].m_frameCount );
+			frame = tr.interpolateFrames( time );
+		}
+		else
+		{
+			hiprt::Transform<hiprt::MatrixFrame> tr(
+				static_cast<const hiprt::MatrixFrame*>( sceneHeader->m_frames ),
+				sceneHeader->m_instances[instanceIDs[i]].m_frameIndex,
+				sceneHeader->m_instances[instanceIDs[i]].m_frameCount );
+			frame = tr.interpolateFrames( time );
+		}
 		matrixFrame = hiprt::MatrixFrame::multiply( hiprt::MatrixFrame::getMatrixFrameInv( frame ), matrixFrame );
 	}
 	return *reinterpret_cast<hiprtFrameMatrix*>( &matrixFrame );

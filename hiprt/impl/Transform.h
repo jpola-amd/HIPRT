@@ -305,7 +305,31 @@ struct alignas( 64 ) MatrixFrame
 };
 HIPRT_STATIC_ASSERT( sizeof( MatrixFrame ) == 64 );
 
+// Template Transform class supporting both Frame and MatrixFrame storage
+template <typename FrameType>
 class Transform
+{
+  public:
+	HIPRT_HOST_DEVICE Transform( const FrameType* frameData, uint32_t frameIndex, uint32_t frameCount )
+		: m_frameCount( frameCount ), m_frames( nullptr )
+	{
+		if ( frameData != nullptr ) m_frames = frameData + frameIndex;
+	}
+
+	HIPRT_HOST_DEVICE Frame interpolateFrames( float time ) const;
+	HIPRT_HOST_DEVICE hiprtRay transformRay( const hiprtRay& ray, float time ) const;
+	HIPRT_HOST_DEVICE float3 transformNormal( const float3& normal, float time ) const;
+	HIPRT_HOST_DEVICE Aabb boundPointMotion( const float3& p ) const;
+	HIPRT_HOST_DEVICE Aabb motionBounds( const Aabb& aabb ) const;
+
+  private:
+	uint32_t		  m_frameCount;
+	const FrameType* m_frames;
+};
+
+// Specialization for Frame (original implementation with quaternion interpolation)
+template <>
+class Transform<Frame>
 {
   public:
 	HIPRT_HOST_DEVICE Transform( const Frame* frameData, uint32_t frameIndex, uint32_t frameCount )
@@ -427,5 +451,205 @@ class Transform
   private:
 	uint32_t	 m_frameCount;
 	const Frame* m_frames;
+};
+
+// Specialization for MatrixFrame (direct matrix interpolation, sacrifices slerp accuracy)
+template <>
+class Transform<MatrixFrame>
+{
+  public:
+	HIPRT_HOST_DEVICE Transform( const MatrixFrame* frameData, uint32_t frameIndex, uint32_t frameCount )
+		: m_frameCount( frameCount ), m_frames( nullptr )
+	{
+		if ( frameData != nullptr ) m_frames = frameData + frameIndex;
+	}
+
+	HIPRT_HOST_DEVICE Frame interpolateFrames( float time ) const
+	{
+		if ( m_frameCount == 0 || m_frames == nullptr ) return Frame();
+
+		const MatrixFrame& f0 = m_frames[0];
+		if ( m_frameCount == 1 || time == 0.0f || time <= f0.m_time ) return f0.convert();
+
+		const MatrixFrame& f1 = m_frames[m_frameCount - 1];
+		if ( time >= f1.m_time ) return f1.convert();
+
+		// Find surrounding frames
+		const MatrixFrame* m0 = &m_frames[0];
+		const MatrixFrame* m1 = &m_frames[1];
+		for ( uint32_t i = 1; i < m_frameCount; ++i )
+		{
+			m1 = &m_frames[i];
+			if ( time >= m0->m_time && time <= m1->m_time ) break;
+			m0 = m1;
+		}
+
+		// Linear interpolation of matrix elements (sacrifices rotation accuracy)
+		float t = ( time - m0->m_time ) / ( m1->m_time - m0->m_time );
+
+		MatrixFrame interpolated;
+		interpolated.m_time = time;
+#ifdef __KERNECC__
+#pragma unroll
+#endif
+		for ( uint32_t i = 0; i < 3; ++i )
+#ifdef __KERNECC__
+#pragma unroll
+#endif
+			for ( uint32_t j = 0; j < 4; ++j )
+				interpolated.m_matrix[i][j] = mix( m0->m_matrix[i][j], m1->m_matrix[i][j], t );
+
+		return interpolated.convert();
+	}
+
+	HIPRT_HOST_DEVICE hiprtRay transformRay( const hiprtRay& ray, float time ) const
+	{
+		if ( m_frameCount == 0 || m_frames == nullptr ) return ray;
+
+		// Get interpolated matrix
+		const MatrixFrame& f0 = m_frames[0];
+		if ( m_frameCount == 1 || time == 0.0f || time <= f0.m_time )
+		{
+			return transformRayWithMatrix( ray, f0 );
+		}
+
+		const MatrixFrame& f1 = m_frames[m_frameCount - 1];
+		if ( time >= f1.m_time )
+		{
+			return transformRayWithMatrix( ray, f1 );
+		}
+
+		// Find and interpolate
+		const MatrixFrame* m0 = &m_frames[0];
+		const MatrixFrame* m1 = &m_frames[1];
+		for ( uint32_t i = 1; i < m_frameCount; ++i )
+		{
+			m1 = &m_frames[i];
+			if ( time >= m0->m_time && time <= m1->m_time ) break;
+			m0 = m1;
+		}
+
+		float t = ( time - m0->m_time ) / ( m1->m_time - m0->m_time );
+
+		MatrixFrame interpolated;
+#ifdef __KERNECC__
+#pragma unroll
+#endif
+		for ( uint32_t i = 0; i < 3; ++i )
+#ifdef __KERNECC__
+#pragma unroll
+#endif
+			for ( uint32_t j = 0; j < 4; ++j )
+				interpolated.m_matrix[i][j] = mix( m0->m_matrix[i][j], m1->m_matrix[i][j], t );
+
+		return transformRayWithMatrix( ray, interpolated );
+	}
+
+	HIPRT_HOST_DEVICE float3 transformNormal( const float3& normal, float time ) const
+	{
+		Frame frame = interpolateFrames( time );
+		return frame.transformVector( normal );
+	}
+
+	HIPRT_HOST_DEVICE Aabb boundPointMotion( const float3& p ) const
+	{
+		Aabb outAabb;
+
+		if ( m_frameCount == 0 || m_frames == nullptr )
+		{
+			outAabb.grow( p );
+			return outAabb;
+		}
+
+		// Sample at discrete time steps (sacrifices accuracy for performance)
+		Frame f0 = m_frames[0].convert();
+		outAabb.grow( f0.transform( p ) );
+
+		if ( m_frameCount == 1 ) return outAabb;
+
+		constexpr uint32_t Steps = 3;
+		constexpr float	   Delta = 1.0f / float( Steps + 1 );
+
+		for ( uint32_t i = 1; i < m_frameCount; ++i )
+		{
+			Frame f1 = m_frames[i].convert();
+			float t	 = Delta;
+			for ( uint32_t j = 1; j <= Steps; ++j )
+			{
+				MatrixFrame interpolated;
+#ifdef __KERNECC__
+#pragma unroll
+#endif
+				for ( uint32_t r = 0; r < 3; ++r )
+#ifdef __KERNECC__
+#pragma unroll
+#endif
+					for ( uint32_t c = 0; c < 4; ++c )
+						interpolated.m_matrix[r][c] = mix( m_frames[i - 1].m_matrix[r][c], m_frames[i].m_matrix[r][c], t );
+
+				Frame f = interpolated.convert();
+				outAabb.grow( f.transform( p ) );
+				t += Delta;
+			}
+			f0 = f1;
+			outAabb.grow( f0.transform( p ) );
+		}
+
+		return outAabb;
+	}
+
+	HIPRT_HOST_DEVICE Aabb motionBounds( const Aabb& aabb ) const
+	{
+		const float3 p0 = aabb.m_min;
+		const float3 p1 = { aabb.m_min.x, aabb.m_min.y, aabb.m_max.z };
+		const float3 p2 = { aabb.m_min.x, aabb.m_max.y, aabb.m_min.z };
+		const float3 p3 = { aabb.m_min.x, aabb.m_max.y, aabb.m_max.z };
+		const float3 p4 = { aabb.m_max.x, aabb.m_min.y, aabb.m_min.z };
+		const float3 p5 = { aabb.m_max.x, aabb.m_min.y, aabb.m_max.z };
+		const float3 p6 = { aabb.m_max.x, aabb.m_max.y, aabb.m_min.z };
+		const float3 p7 = aabb.m_max;
+
+		Aabb outAabb;
+		outAabb.grow( boundPointMotion( p0 ) );
+		outAabb.grow( boundPointMotion( p1 ) );
+		outAabb.grow( boundPointMotion( p2 ) );
+		outAabb.grow( boundPointMotion( p3 ) );
+		outAabb.grow( boundPointMotion( p4 ) );
+		outAabb.grow( boundPointMotion( p5 ) );
+		outAabb.grow( boundPointMotion( p6 ) );
+		outAabb.grow( boundPointMotion( p7 ) );
+		return outAabb;
+	}
+
+  private:
+	HIPRT_HOST_DEVICE hiprtRay transformRayWithMatrix( const hiprtRay& ray, const MatrixFrame& mat ) const
+	{
+		// Check if matrix is identity (optimization)
+		bool isIdentity = true;
+		for ( uint32_t i = 0; i < 3 && isIdentity; ++i )
+			for ( uint32_t j = 0; j < 3 && isIdentity; ++j )
+				if ( mat.m_matrix[i][j] != ( i == j ? 1.0f : 0.0f ) ) isIdentity = false;
+
+		if ( isIdentity )
+		{
+			bool hasTranslation = false;
+			for ( uint32_t i = 0; i < 3; ++i )
+				if ( mat.m_matrix[i][3] != 0.0f ) hasTranslation = true;
+			if ( !hasTranslation ) return ray;
+		}
+
+		// Compute inverse matrix transform for ray (world to local)
+		Frame frame = mat.convert();
+		hiprtRay outRay;
+		outRay.origin	 = frame.invTransform( ray.origin );
+		outRay.direction = frame.invTransform( ray.origin + ray.direction );
+		outRay.direction = outRay.direction - outRay.origin;
+		outRay.minT		 = ray.minT;
+		outRay.maxT		 = ray.maxT;
+		return outRay;
+	}
+
+	uint32_t			m_frameCount;
+	const MatrixFrame* m_frames;
 };
 } // namespace hiprt
