@@ -92,12 +92,25 @@ build( PrimitiveContainer& primitives, uint32_t geomType, MemoryArena& storageMe
 	// STEP 0: Init data
 	if constexpr ( is_same<Header, SceneHeader>::value )
 	{
-		Frame*	  frames	= storageMemoryArena.allocate<Frame>( primitives.getFrameCount() );
 		Instance* instances = storageMemoryArena.allocate<Instance>( primitives.getCount() );
-
-		primitives.setFrames( frames );
-		InitSceneData<>(
-			index, storageMemoryArena.getStorageSize(), primitives, boxNodes, primNodes, instances, frames, header );
+		
+		// Check if we can store MatrixFrame directly (without conversion to Frame)
+		if constexpr ( is_same<PrimitiveContainer, InstanceList<MatrixFrame>>::value )
+		{
+			// Direct MatrixFrame storage path
+			MatrixFrame* frames = storageMemoryArena.allocate<MatrixFrame>( primitives.getFrameCount() );
+			primitives.setFrames( frames );
+			InitSceneData<PrimitiveContainer, false>(
+				index, storageMemoryArena.getStorageSize(), primitives, boxNodes, primNodes, instances, frames, header );
+		}
+		else
+		{
+			// Legacy Frame conversion path
+			Frame* frames = storageMemoryArena.allocate<Frame>( primitives.getFrameCount() );
+			primitives.setFrames( frames );
+			InitSceneData<PrimitiveContainer, true>(
+				index, storageMemoryArena.getStorageSize(), primitives, boxNodes, primNodes, instances, frames, header );
+		}
 	}
 	else
 	{

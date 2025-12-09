@@ -180,35 +180,19 @@ struct alignas( 64 ) MatrixFrame
 		pt.y = p.y - m_matrix[1][3];
 		pt.z = p.z - m_matrix[2][3];
 		
-		// Compute inverse of 3x3 rotation/scale matrix using cofactor method
-		// inv(M) = adj(M) / det(M)
-		float m00 = m_matrix[0][0], m01 = m_matrix[0][1], m02 = m_matrix[0][2];
-		float m10 = m_matrix[1][0], m11 = m_matrix[1][1], m12 = m_matrix[1][2];
-		float m20 = m_matrix[2][0], m21 = m_matrix[2][1], m22 = m_matrix[2][2];
-		
-		// Calculate determinant
-		float det = m00 * (m11 * m22 - m12 * m21) -
-					m01 * (m10 * m22 - m12 * m20) +
-					m02 * (m10 * m21 - m11 * m20);
-		
-		float invDet = 1.0f / det;
-		
-		// Calculate inverse matrix elements (cofactor matrix transposed / det)
-		float inv00 = (m11 * m22 - m12 * m21) * invDet;
-		float inv01 = (m02 * m21 - m01 * m22) * invDet;
-		float inv02 = (m01 * m12 - m02 * m11) * invDet;
-		float inv10 = (m12 * m20 - m10 * m22) * invDet;
-		float inv11 = (m00 * m22 - m02 * m20) * invDet;
-		float inv12 = (m02 * m10 - m00 * m12) * invDet;
-		float inv20 = (m10 * m21 - m11 * m20) * invDet;
-		float inv21 = (m01 * m20 - m00 * m21) * invDet;
-		float inv22 = (m00 * m11 - m01 * m10) * invDet;
+		// Compute inverse of 3x3 rotation/scale matrix
+		float inv[3][3];
+		if ( !computeInverse3x3( inv ) )
+		{
+			// Matrix is singular, return identity transformation
+			return p;
+		}
 		
 		// Apply inverse matrix to translated point
 		float3 result;
-		result.x = inv00 * pt.x + inv01 * pt.y + inv02 * pt.z;
-		result.y = inv10 * pt.x + inv11 * pt.y + inv12 * pt.z;
-		result.z = inv20 * pt.x + inv21 * pt.y + inv22 * pt.z;
+		result.x = inv[0][0] * pt.x + inv[0][1] * pt.y + inv[0][2] * pt.z;
+		result.y = inv[1][0] * pt.x + inv[1][1] * pt.y + inv[1][2] * pt.z;
+		result.z = inv[2][0] * pt.x + inv[2][1] * pt.y + inv[2][2] * pt.z;
 		return result;
 	}
 
@@ -217,33 +201,18 @@ struct alignas( 64 ) MatrixFrame
 		if ( identity() ) return v;
 		
 		// For vectors, only apply inverse of 3x3 rotation/scale matrix (no translation)
-		float m00 = m_matrix[0][0], m01 = m_matrix[0][1], m02 = m_matrix[0][2];
-		float m10 = m_matrix[1][0], m11 = m_matrix[1][1], m12 = m_matrix[1][2];
-		float m20 = m_matrix[2][0], m21 = m_matrix[2][1], m22 = m_matrix[2][2];
-		
-		// Calculate determinant
-		float det = m00 * (m11 * m22 - m12 * m21) -
-					m01 * (m10 * m22 - m12 * m20) +
-					m02 * (m10 * m21 - m11 * m20);
-		
-		float invDet = 1.0f / det;
-		
-		// Calculate inverse matrix elements
-		float inv00 = (m11 * m22 - m12 * m21) * invDet;
-		float inv01 = (m02 * m21 - m01 * m22) * invDet;
-		float inv02 = (m01 * m12 - m02 * m11) * invDet;
-		float inv10 = (m12 * m20 - m10 * m22) * invDet;
-		float inv11 = (m00 * m22 - m02 * m20) * invDet;
-		float inv12 = (m02 * m10 - m00 * m12) * invDet;
-		float inv20 = (m10 * m21 - m11 * m20) * invDet;
-		float inv21 = (m01 * m20 - m00 * m21) * invDet;
-		float inv22 = (m00 * m11 - m01 * m10) * invDet;
+		float inv[3][3];
+		if ( !computeInverse3x3( inv ) )
+		{
+			// Matrix is singular, return identity transformation
+			return v;
+		}
 		
 		// Apply inverse matrix to vector
 		float3 result;
-		result.x = inv00 * v.x + inv01 * v.y + inv02 * v.z;
-		result.y = inv10 * v.x + inv11 * v.y + inv12 * v.z;
-		result.z = inv20 * v.x + inv21 * v.y + inv22 * v.z;
+		result.x = inv[0][0] * v.x + inv[0][1] * v.y + inv[0][2] * v.z;
+		result.y = inv[1][0] * v.x + inv[1][1] * v.y + inv[1][2] * v.z;
+		result.z = inv[2][0] * v.x + inv[2][1] * v.y + inv[2][2] * v.z;
 		return result;
 	}
 
@@ -256,6 +225,41 @@ struct alignas( 64 ) MatrixFrame
 		if ( m_matrix[2][0] != 0.0f || m_matrix[2][1] != 0.0f || m_matrix[2][3] != 0.0f ) return false;
 		return true;
 	}
+
+  private:
+	// Helper method to compute the inverse of the 3x3 rotation/scale submatrix
+	// Returns false if matrix is singular (determinant too close to zero)
+	HIPRT_HOST_DEVICE bool computeInverse3x3( float inv[3][3] ) const
+	{
+		float m00 = m_matrix[0][0], m01 = m_matrix[0][1], m02 = m_matrix[0][2];
+		float m10 = m_matrix[1][0], m11 = m_matrix[1][1], m12 = m_matrix[1][2];
+		float m20 = m_matrix[2][0], m21 = m_matrix[2][1], m22 = m_matrix[2][2];
+		
+		// Calculate determinant
+		float det = m00 * (m11 * m22 - m12 * m21) -
+					m01 * (m10 * m22 - m12 * m20) +
+					m02 * (m10 * m21 - m11 * m20);
+		
+		// Check for singular matrix
+		if ( abs( det ) < 1e-10f ) return false;
+		
+		float invDet = 1.0f / det;
+		
+		// Calculate inverse matrix elements (cofactor matrix transposed / det)
+		inv[0][0] = (m11 * m22 - m12 * m21) * invDet;
+		inv[0][1] = (m02 * m21 - m01 * m22) * invDet;
+		inv[0][2] = (m01 * m12 - m02 * m11) * invDet;
+		inv[1][0] = (m12 * m20 - m10 * m22) * invDet;
+		inv[1][1] = (m00 * m22 - m02 * m20) * invDet;
+		inv[1][2] = (m02 * m10 - m00 * m12) * invDet;
+		inv[2][0] = (m10 * m21 - m11 * m20) * invDet;
+		inv[2][1] = (m01 * m20 - m00 * m21) * invDet;
+		inv[2][2] = (m00 * m11 - m01 * m10) * invDet;
+		
+		return true;
+	}
+
+  public:
 
 	HIPRT_HOST_DEVICE Frame convert() const
 	{
@@ -381,6 +385,66 @@ struct alignas( 64 ) MatrixFrame
 			   matrixFrame.m_matrix[2][2] * frame.m_translation.z );
 
 		return matrixFrame;
+	}
+
+	static HIPRT_HOST_DEVICE MatrixFrame getMatrixFrameInv( const MatrixFrame& matrixFrame )
+	{
+		MatrixFrame invMatrixFrame{};
+		invMatrixFrame.m_time = matrixFrame.m_time;
+
+		// Check if identity
+		if ( matrixFrame.identity() )
+		{
+			invMatrixFrame.m_matrix[0][0] = 1.0f;
+			invMatrixFrame.m_matrix[1][1] = 1.0f;
+			invMatrixFrame.m_matrix[2][2] = 1.0f;
+			return invMatrixFrame;
+		}
+
+		// Extract 3x3 rotation/scale part
+		const float* m = &matrixFrame.m_matrix[0][0];
+		
+		// Compute determinant
+		float det = m[0] * ( m[5] * m[10] - m[6] * m[9] ) -
+					m[1] * ( m[4] * m[10] - m[6] * m[8] ) +
+					m[2] * ( m[4] * m[9] - m[5] * m[8] );
+
+		// Check for singular matrix
+		if ( abs( det ) < 1e-10f )
+		{
+			invMatrixFrame.m_matrix[0][0] = 1.0f;
+			invMatrixFrame.m_matrix[1][1] = 1.0f;
+			invMatrixFrame.m_matrix[2][2] = 1.0f;
+			return invMatrixFrame;
+		}
+
+		float invDet = 1.0f / det;
+
+		// Compute inverse of 3x3 rotation/scale part using cofactor method
+		invMatrixFrame.m_matrix[0][0] = ( m[5] * m[10] - m[6] * m[9] ) * invDet;
+		invMatrixFrame.m_matrix[0][1] = ( m[2] * m[9] - m[1] * m[10] ) * invDet;
+		invMatrixFrame.m_matrix[0][2] = ( m[1] * m[6] - m[2] * m[5] ) * invDet;
+		
+		invMatrixFrame.m_matrix[1][0] = ( m[6] * m[8] - m[4] * m[10] ) * invDet;
+		invMatrixFrame.m_matrix[1][1] = ( m[0] * m[10] - m[2] * m[8] ) * invDet;
+		invMatrixFrame.m_matrix[1][2] = ( m[2] * m[4] - m[0] * m[6] ) * invDet;
+		
+		invMatrixFrame.m_matrix[2][0] = ( m[4] * m[9] - m[5] * m[8] ) * invDet;
+		invMatrixFrame.m_matrix[2][1] = ( m[1] * m[8] - m[0] * m[9] ) * invDet;
+		invMatrixFrame.m_matrix[2][2] = ( m[0] * m[5] - m[1] * m[4] ) * invDet;
+
+		// Compute inverse translation: -R^-1 * t
+		invMatrixFrame.m_matrix[0][3] = -( invMatrixFrame.m_matrix[0][0] * m[3] + 
+										   invMatrixFrame.m_matrix[0][1] * m[7] + 
+										   invMatrixFrame.m_matrix[0][2] * m[11] );
+		invMatrixFrame.m_matrix[1][3] = -( invMatrixFrame.m_matrix[1][0] * m[3] + 
+										   invMatrixFrame.m_matrix[1][1] * m[7] + 
+										   invMatrixFrame.m_matrix[1][2] * m[11] );
+		invMatrixFrame.m_matrix[2][3] = -( invMatrixFrame.m_matrix[2][0] * m[3] + 
+										   invMatrixFrame.m_matrix[2][1] * m[7] + 
+										   invMatrixFrame.m_matrix[2][2] * m[11] );
+
+		return invMatrixFrame;
 	}
 
 	static HIPRT_HOST_DEVICE MatrixFrame multiply( const MatrixFrame& matrix0, const MatrixFrame& matrix1 )
@@ -561,6 +625,129 @@ class Transform<Frame>
 	const Frame* m_frames;
 };
 
+// Specialization for SRTFrame (converts to Frame for transformation)
+template <>
+class Transform<SRTFrame>
+{
+  public:
+	HIPRT_HOST_DEVICE Transform( const SRTFrame* frameData, uint32_t frameIndex, uint32_t frameCount )
+		: m_frameCount( frameCount ), m_frames( nullptr )
+	{
+		if ( frameData != nullptr ) m_frames = frameData + frameIndex;
+	}
+
+	HIPRT_HOST_DEVICE Frame interpolateFrames( float time ) const
+	{
+		if ( m_frameCount == 0 || m_frames == nullptr ) return Frame();
+
+		const SRTFrame& f0 = m_frames[0];
+		if ( m_frameCount == 1 || time == 0.0f || time <= f0.m_time ) return f0.convert();
+
+		const SRTFrame& f1 = m_frames[m_frameCount - 1];
+		if ( time >= f1.m_time ) return f1.convert();
+
+		// Find surrounding frames
+		const SRTFrame* m0 = &m_frames[0];
+		const SRTFrame* m1 = &m_frames[1];
+		for ( uint32_t i = 1; i < m_frameCount; i++ )
+		{
+			m1 = &m_frames[i];
+			if ( time <= m1->m_time )
+			{
+				m0 = &m_frames[i - 1];
+				break;
+			}
+		}
+
+		// Convert to Frame and interpolate
+		Frame frame0 = m0->convert();
+		Frame frame1 = m1->convert();
+
+		// Interpolate between frames
+		float t		 = ( time - m0->m_time ) / ( m1->m_time - m0->m_time );
+		Frame result = frame0;
+		result.m_time		 = time;
+		result.m_scale		 = frame0.m_scale + ( frame1.m_scale - frame0.m_scale ) * t;
+		result.m_shear		 = frame0.m_shear + ( frame1.m_shear - frame0.m_shear ) * t;
+		result.m_translation = frame0.m_translation + ( frame1.m_translation - frame0.m_translation ) * t;
+		result.m_rotation	 = qtMix( frame0.m_rotation, frame1.m_rotation, t );
+
+		return result;
+	}
+
+	HIPRT_HOST_DEVICE hiprtRay transformRay( const hiprtRay& ray, float time ) const
+	{
+		Frame frame = interpolateFrames( time );
+		return transformRayWithFrame( ray, frame );
+	}
+
+	HIPRT_HOST_DEVICE float3 transformNormal( const float3& normal, float time ) const
+	{
+		Frame frame = interpolateFrames( time );
+		return frame.transformVector( normal );
+	}
+
+	HIPRT_HOST_DEVICE Aabb boundPointMotion( const float3& p ) const
+	{
+		Aabb outAabb;
+		if ( m_frameCount == 0 || m_frames == nullptr )
+		{
+			outAabb.grow( p );
+			return outAabb;
+		}
+
+		// Sample transformations at each keyframe
+		for ( uint32_t i = 0; i < m_frameCount; i++ )
+		{
+			Frame frame = m_frames[i].convert();
+			outAabb.grow( frame.transform( p ) );
+		}
+
+		return outAabb;
+	}
+
+	HIPRT_HOST_DEVICE Aabb motionBounds( const Aabb& aabb ) const
+	{
+		const float3 p0 = aabb.m_min;
+		const float3 p1 = { aabb.m_min.x, aabb.m_min.y, aabb.m_max.z };
+		const float3 p2 = { aabb.m_min.x, aabb.m_max.y, aabb.m_min.z };
+		const float3 p3 = { aabb.m_min.x, aabb.m_max.y, aabb.m_max.z };
+		const float3 p4 = { aabb.m_max.x, aabb.m_min.y, aabb.m_min.z };
+		const float3 p5 = { aabb.m_max.x, aabb.m_min.y, aabb.m_max.z };
+		const float3 p6 = { aabb.m_max.x, aabb.m_max.y, aabb.m_min.z };
+		const float3 p7 = aabb.m_max;
+
+		Aabb outAabb;
+		outAabb.grow( boundPointMotion( p0 ) );
+		outAabb.grow( boundPointMotion( p1 ) );
+		outAabb.grow( boundPointMotion( p2 ) );
+		outAabb.grow( boundPointMotion( p3 ) );
+		outAabb.grow( boundPointMotion( p4 ) );
+		outAabb.grow( boundPointMotion( p5 ) );
+		outAabb.grow( boundPointMotion( p6 ) );
+		outAabb.grow( boundPointMotion( p7 ) );
+		return outAabb;
+	}
+
+  private:
+	HIPRT_HOST_DEVICE hiprtRay transformRayWithFrame( const hiprtRay& ray, const Frame& frame ) const
+	{
+		// Check if frame is identity (optimization)
+		if ( frame.identity() ) return ray;
+
+		// Transform ray
+		hiprtRay outRay;
+		outRay.origin	 = frame.invTransform( ray.origin );
+		outRay.direction = frame.invTransformVector( ray.direction );
+		outRay.minT		 = ray.minT;
+		outRay.maxT		 = ray.maxT;
+		return outRay;
+	}
+
+	uint32_t		  m_frameCount;
+	const SRTFrame* m_frames;
+};
+
 // Specialization for MatrixFrame (direct matrix interpolation, sacrifices slerp accuracy)
 template <>
 class Transform<MatrixFrame>
@@ -669,9 +856,8 @@ class Transform<MatrixFrame>
 			return outAabb;
 		}
 
-		// Sample at discrete time steps (sacrifices accuracy for performance)
-		Frame f0 = m_frames[0].convert();
-		outAabb.grow( f0.transform( p ) );
+		// Use MatrixFrame directly without conversion
+		outAabb.grow( m_frames[0].transform( p ) );
 
 		if ( m_frameCount == 1 ) return outAabb;
 
@@ -680,8 +866,7 @@ class Transform<MatrixFrame>
 
 		for ( uint32_t i = 1; i < m_frameCount; ++i )
 		{
-			Frame f1 = m_frames[i].convert();
-			float t	 = Delta;
+			float t = Delta;
 			for ( uint32_t j = 1; j <= Steps; ++j )
 			{
 				MatrixFrame interpolated;
@@ -695,12 +880,10 @@ class Transform<MatrixFrame>
 					for ( uint32_t c = 0; c < 4; ++c )
 						interpolated.m_matrix[r][c] = mix( m_frames[i - 1].m_matrix[r][c], m_frames[i].m_matrix[r][c], t );
 
-				Frame f = interpolated.convert();
-				outAabb.grow( f.transform( p ) );
+				outAabb.grow( interpolated.transform( p ) );
 				t += Delta;
 			}
-			f0 = f1;
-			outAabb.grow( f0.transform( p ) );
+			outAabb.grow( m_frames[i].transform( p ) );
 		}
 
 		return outAabb;

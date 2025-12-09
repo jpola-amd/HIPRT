@@ -46,8 +46,19 @@ class InstanceList
 	{
 		const hiprtInstance		   instance	 = fetchInstance( index );
 		const hiprtTransformHeader transform = fetchTransformHeader( index );
-		const Frame				   frame	 = fetchFrame( transform.frameIndex );
+		const ApiFrame			   apiFrame	 = fetchFrame( transform.frameIndex );
 		const uint32_t			   mask		 = fetchMask( index );
+
+		// Convert to Frame if needed for InstanceNode.init
+		Frame frame;
+		if constexpr ( is_same<ApiFrame, MatrixFrame>::value )
+		{
+			frame = apiFrame.convert();
+		}
+		else
+		{
+			frame = apiFrame.convert();
+		}
 
 		InstanceNode instanceNode{};
 		if constexpr ( is_same<InstanceNode, HwInstanceNode>::value )
@@ -104,11 +115,11 @@ class InstanceList
 	HIPRT_DEVICE Aabb fetchAabb( const uint32_t index ) const
 	{
 		const hiprtTransformHeader header = fetchTransformHeader( index );
-		const Transform			   t( static_cast<Frame*>( m_frames ), header.frameIndex, header.frameCount );
+		const Transform<ApiFrame>  t( static_cast<ApiFrame*>( m_frames ), header.frameIndex, header.frameCount );
 		const hiprtInstance		   instance = fetchInstance( index );
 		const BoxNode*			   boxNodes = instance.type == hiprtInstanceTypeScene
-												  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
-												  : reinterpret_cast<GeomHeader*>( instance.geometry )->m_boxNodes;
+											  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
+											  : reinterpret_cast<GeomHeader*>( instance.geometry )->m_boxNodes;
 		const BoxNode&			   root		= boxNodes[0];
 
 		Aabb aabb;
@@ -118,22 +129,18 @@ class InstanceList
 			aabb.grow( t.motionBounds( childBox ) );
 		}
 		return aabb;
-	}
-
-	HIPRT_DEVICE float3 fetchCenter( const uint32_t index ) const { return fetchAabb( index ).center(); }
+	}	HIPRT_DEVICE float3 fetchCenter( const uint32_t index ) const { return fetchAabb( index ).center(); }
 
 	HIPRT_DEVICE void split(
 		const uint32_t index, const uint32_t axis, const float position, const Aabb& box, Aabb& leftBox, Aabb& rightBox ) const
 	{
 		const hiprtTransformHeader header = fetchTransformHeader( index );
-		const Transform			   t( static_cast<Frame*>( m_frames ), header.frameIndex, header.frameCount );
+		const Transform<ApiFrame>  t( static_cast<ApiFrame*>( m_frames ), header.frameIndex, header.frameCount );
 		const hiprtInstance		   instance = fetchInstance( index );
 		const BoxNode*			   boxNodes = instance.type == hiprtInstanceTypeScene
-												  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
-												  : reinterpret_cast<GeomHeader*>( instance.geometry )->m_boxNodes;
-		const BoxNode&			   root		= boxNodes[0];
-
-		leftBox = rightBox = Aabb();
+											  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
+											  : reinterpret_cast<GeomHeader*>( instance.geometry )->m_boxNodes;
+		const BoxNode&			   root		= boxNodes[0];		leftBox = rightBox = Aabb();
 		for ( uint32_t i = 0; i < root.getChildCount(); ++i )
 		{
 			const Aabb	childBox = t.motionBounds( root.getChildBox( i ) );
@@ -167,14 +174,12 @@ class InstanceList
 	HIPRT_DEVICE Obb fetchObb( const uint32_t index, const uint32_t matrixIndex, const Aabb& box ) const
 	{
 		const hiprtTransformHeader header = fetchTransformHeader( index );
-		const Transform			   t( static_cast<Frame*>( m_frames ), header.frameIndex, header.frameCount );
+		const Transform<ApiFrame>  t( static_cast<ApiFrame*>( m_frames ), header.frameIndex, header.frameCount );
 		const hiprtInstance		   instance = fetchInstance( index );
 		const BoxNode*			   boxNodes = instance.type == hiprtInstanceTypeScene
-												  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
-												  : reinterpret_cast<GeomHeader*>( instance.geometry )->m_boxNodes;
-		const BoxNode&			   root		= boxNodes[0];
-
-		Obb obb( matrixIndex );
+											  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
+											  : reinterpret_cast<GeomHeader*>( instance.geometry )->m_boxNodes;
+		const BoxNode&			   root		= boxNodes[0];		Obb obb( matrixIndex );
 		for ( uint32_t i = 0; i < root.getChildCount(); ++i )
 		{
 			const Aabb childBox = t.motionBounds( root.getChildBox( i ) ).intersect( box );
@@ -201,15 +206,27 @@ class InstanceList
 		return m_transformHeaders[index];
 	}
 
-	HIPRT_DEVICE Frame fetchFrame( const uint32_t index ) const
+	HIPRT_DEVICE ApiFrame fetchFrame( const uint32_t index ) const
 	{
-		if ( m_frameCount == 0 || m_apiFrames == nullptr || m_frames == nullptr ) return Frame();
-		return static_cast<Frame*>( m_frames )[index];
+		if ( m_frameCount == 0 || m_apiFrames == nullptr || m_frames == nullptr ) return ApiFrame();
+		return static_cast<ApiFrame*>( m_frames )[index];
 	}
 
 	HIPRT_DEVICE void convertFrame( const uint32_t index ) const
 	{
-		if ( m_frameCount > 0 && m_apiFrames != nullptr && m_frames != nullptr ) static_cast<Frame*>( m_frames )[index] = m_apiFrames[index].convert();
+		if ( m_frameCount > 0 && m_apiFrames != nullptr && m_frames != nullptr )
+		{
+			if constexpr ( is_same<ApiFrame, SRTFrame>::value )
+			{
+				// Convert SRTFrame to Frame
+				static_cast<Frame*>( m_frames )[index] = m_apiFrames[index].convert();
+			}
+			else
+			{
+				// Direct copy for MatrixFrame (no conversion)
+				static_cast<ApiFrame*>( m_frames )[index] = m_apiFrames[index];
+			}
+		}
 	}
 
 	HIPRT_HOST_DEVICE void copyFrameDirect( const uint32_t index, void* outFrames ) const
@@ -223,8 +240,17 @@ class InstanceList
 
 	HIPRT_HOST_DEVICE bool copyInvTransformMatrix( const uint32_t index, float ( &matrix )[3][4] ) const
 	{
-		const Frame frame = fetchFrame( index );
-		return hiprt::copyInvTransformMatrix( frame, matrix );
+		const ApiFrame frame = fetchFrame( index );
+		if constexpr ( is_same<ApiFrame, MatrixFrame>::value )
+		{
+			// Direct matrix copy for MatrixFrame
+			return hiprt::copyInvTransformMatrix( frame, matrix );
+		}
+		else
+		{
+			// Convert to Frame first for SRTFrame
+			return hiprt::copyInvTransformMatrix( frame.convert(), matrix );
+		}
 	}
 
 	HIPRT_HOST_DEVICE uint32_t getCount() const { return m_instanceCount; }

@@ -173,18 +173,40 @@ void BvhImporter::build(
 	if constexpr ( std::is_same<Header, SceneHeader>::value )
 	{
 		Instance* instances = storageMemoryArena.allocate<Instance>( primitives.getCount() );
-		Frame*	  frames	= storageMemoryArena.allocate<Frame>( primitives.getFrameCount() );
-
-		primitives.setFrames( frames );
-		Kernel initDataKernel = compiler.getKernel(
-			context,
-			Utility::getRootDir() / "hiprt/impl/BvhBuilderKernels.h",
-			"InitSceneData_" + containerParam,
-			opts,
-			GET_ARG_LIST( BvhBuilderKernels ) );
-		initDataKernel.setArgs(
-			{ storageMemoryArena.getStorageSize(), primitives, boxNodes, primNodes, instances, frames, header } );
-		initDataKernel.launch( std::max( primitives.getFrameCount(), primitives.getCount() ), stream );
+		
+		// Check if we can store MatrixFrame directly (without conversion to Frame)
+		if constexpr ( std::is_same<PrimitiveContainer, InstanceList<MatrixFrame>>::value )
+		{
+			// Direct MatrixFrame storage path
+			MatrixFrame* frames = storageMemoryArena.allocate<MatrixFrame>( primitives.getFrameCount() );
+			primitives.setFrames( frames );
+			
+			Kernel initDataKernel = compiler.getKernel(
+				context,
+				Utility::getRootDir() / "hiprt/impl/BvhBuilderKernels.h",
+				"InitSceneData_" + containerParam + "_Direct",
+				opts,
+				GET_ARG_LIST( BvhBuilderKernels ) );
+			initDataKernel.setArgs(
+				{ storageMemoryArena.getStorageSize(), primitives, boxNodes, primNodes, instances, frames, header } );
+			initDataKernel.launch( std::max( primitives.getFrameCount(), primitives.getCount() ), stream );
+		}
+		else
+		{
+			// Legacy Frame conversion path
+			Frame* frames = storageMemoryArena.allocate<Frame>( primitives.getFrameCount() );
+			primitives.setFrames( frames );
+			
+			Kernel initDataKernel = compiler.getKernel(
+				context,
+				Utility::getRootDir() / "hiprt/impl/BvhBuilderKernels.h",
+				"InitSceneData_" + containerParam,
+				opts,
+				GET_ARG_LIST( BvhBuilderKernels ) );
+			initDataKernel.setArgs(
+				{ storageMemoryArena.getStorageSize(), primitives, boxNodes, primNodes, instances, frames, header } );
+			initDataKernel.launch( std::max( primitives.getFrameCount(), primitives.getCount() ), stream );
+		}
 	}
 	else
 	{

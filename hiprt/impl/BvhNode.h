@@ -148,6 +148,13 @@ HIPRT_HOST_DEVICE HIPRT_INLINE bool copyInvTransformMatrix( const Frame& frame, 
 	return frame.identity();
 }
 
+HIPRT_HOST_DEVICE HIPRT_INLINE bool copyInvTransformMatrix( const MatrixFrame& matrixFrame, float ( &matrix )[3][4] )
+{
+	const MatrixFrame invMatrixFrame = MatrixFrame::getMatrixFrameInv( matrixFrame );
+	memcpy( &matrix[0][0], &invMatrixFrame.m_matrix[0][0], sizeof( float ) * 12 );
+	return matrixFrame.identity();
+}
+
 // 128B
 struct alignas( DefaultAlignment ) Box4Node
 {
