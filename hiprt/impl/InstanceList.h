@@ -46,19 +46,8 @@ class InstanceList
 	{
 		const hiprtInstance		   instance	 = fetchInstance( index );
 		const hiprtTransformHeader transform = fetchTransformHeader( index );
-		const ApiFrame			   apiFrame	 = fetchFrame( transform.frameIndex );
+		const Frame				   frame	 = fetchFrame( transform.frameIndex );
 		const uint32_t			   mask		 = fetchMask( index );
-
-		// Convert to Frame if needed for InstanceNode.init
-		Frame frame;
-		if constexpr ( is_same<ApiFrame, MatrixFrame>::value )
-		{
-			frame = apiFrame.convert();
-		}
-		else
-		{
-			frame = apiFrame.convert();
-		}
 
 		InstanceNode instanceNode{};
 		if constexpr ( is_same<InstanceNode, HwInstanceNode>::value )
@@ -115,7 +104,6 @@ class InstanceList
 	HIPRT_DEVICE Aabb fetchAabb( const uint32_t index ) const
 	{
 		const hiprtTransformHeader header = fetchTransformHeader( index );
-		const Transform<ApiFrame>  t( static_cast<ApiFrame*>( m_frames ), header.frameIndex, header.frameCount );
 		const hiprtInstance		   instance = fetchInstance( index );
 		const BoxNode*			   boxNodes = instance.type == hiprtInstanceTypeScene
 											  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
@@ -123,10 +111,25 @@ class InstanceList
 		const BoxNode&			   root		= boxNodes[0];
 
 		Aabb aabb;
-		for ( uint32_t i = 0; i < root.getChildCount(); ++i )
+		if constexpr ( is_same<ApiFrame, SRTFrame>::value )
 		{
-			const Aabb childBox = root.getChildBox( i );
-			aabb.grow( t.motionBounds( childBox ) );
+			// For SRTFrame, m_frames contains converted Frame data
+			const Transform<Frame> t( static_cast<Frame*>( m_frames ), header.frameIndex, header.frameCount );
+			for ( uint32_t i = 0; i < root.getChildCount(); ++i )
+			{
+				const Aabb childBox = root.getChildBox( i );
+				aabb.grow( t.motionBounds( childBox ) );
+			}
+		}
+		else
+		{
+			// For MatrixFrame, use direct MatrixFrame transform
+			const Transform<ApiFrame> t( static_cast<ApiFrame*>( m_frames ), header.frameIndex, header.frameCount );
+			for ( uint32_t i = 0; i < root.getChildCount(); ++i )
+			{
+				const Aabb childBox = root.getChildBox( i );
+				aabb.grow( t.motionBounds( childBox ) );
+			}
 		}
 		return aabb;
 	}	HIPRT_DEVICE float3 fetchCenter( const uint32_t index ) const { return fetchAabb( index ).center(); }
@@ -135,33 +138,68 @@ class InstanceList
 		const uint32_t index, const uint32_t axis, const float position, const Aabb& box, Aabb& leftBox, Aabb& rightBox ) const
 	{
 		const hiprtTransformHeader header = fetchTransformHeader( index );
-		const Transform<ApiFrame>  t( static_cast<ApiFrame*>( m_frames ), header.frameIndex, header.frameCount );
 		const hiprtInstance		   instance = fetchInstance( index );
 		const BoxNode*			   boxNodes = instance.type == hiprtInstanceTypeScene
 											  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
 											  : reinterpret_cast<GeomHeader*>( instance.geometry )->m_boxNodes;
-		const BoxNode&			   root		= boxNodes[0];		leftBox = rightBox = Aabb();
-		for ( uint32_t i = 0; i < root.getChildCount(); ++i )
+		const BoxNode&			   root		= boxNodes[0];
+		
+		leftBox = rightBox = Aabb();
+		
+		if constexpr ( is_same<ApiFrame, SRTFrame>::value )
 		{
-			const Aabb	childBox = t.motionBounds( root.getChildBox( i ) );
-			const float mn		 = ( &childBox.m_min.x )[axis];
-			const float mx		 = ( &childBox.m_max.x )[axis];
-			if ( position >= mx )
+			// For SRTFrame, m_frames contains converted Frame data
+			const Transform<Frame> t( static_cast<Frame*>( m_frames ), header.frameIndex, header.frameCount );
+			for ( uint32_t i = 0; i < root.getChildCount(); ++i )
 			{
-				leftBox.grow( childBox );
+				const Aabb	childBox = t.motionBounds( root.getChildBox( i ) );
+				const float mn		 = ( &childBox.m_min.x )[axis];
+				const float mx		 = ( &childBox.m_max.x )[axis];
+				if ( position >= mx )
+				{
+					leftBox.grow( childBox );
+				}
+				else if ( position <= mn )
+				{
+					rightBox.grow( childBox );
+				}
+				else
+				{
+					Aabb leftChildBox				 = childBox;
+					Aabb rightChildBox				 = childBox;
+					( &leftChildBox.m_max.x )[axis]	 = position;
+					( &rightChildBox.m_min.x )[axis] = position;
+					leftBox.grow( leftChildBox );
+					rightBox.grow( rightChildBox );
+				}
 			}
-			else if ( position <= mn )
+		}
+		else
+		{
+			// For MatrixFrame, use direct MatrixFrame transform
+			const Transform<ApiFrame> t( static_cast<ApiFrame*>( m_frames ), header.frameIndex, header.frameCount );
+			for ( uint32_t i = 0; i < root.getChildCount(); ++i )
 			{
-				rightBox.grow( childBox );
-			}
-			else
-			{
-				Aabb leftChildBox				 = childBox;
-				Aabb rightChildBox				 = childBox;
-				( &leftChildBox.m_max.x )[axis]	 = position;
-				( &rightChildBox.m_min.x )[axis] = position;
-				leftBox.grow( leftChildBox );
-				rightBox.grow( rightChildBox );
+				const Aabb	childBox = t.motionBounds( root.getChildBox( i ) );
+				const float mn		 = ( &childBox.m_min.x )[axis];
+				const float mx		 = ( &childBox.m_max.x )[axis];
+				if ( position >= mx )
+				{
+					leftBox.grow( childBox );
+				}
+				else if ( position <= mn )
+				{
+					rightBox.grow( childBox );
+				}
+				else
+				{
+					Aabb leftChildBox				 = childBox;
+					Aabb rightChildBox				 = childBox;
+					( &leftChildBox.m_max.x )[axis]	 = position;
+					( &rightChildBox.m_min.x )[axis] = position;
+					leftBox.grow( leftChildBox );
+					rightBox.grow( rightChildBox );
+				}
 			}
 		}
 
@@ -174,16 +212,33 @@ class InstanceList
 	HIPRT_DEVICE Obb fetchObb( const uint32_t index, const uint32_t matrixIndex, const Aabb& box ) const
 	{
 		const hiprtTransformHeader header = fetchTransformHeader( index );
-		const Transform<ApiFrame>  t( static_cast<ApiFrame*>( m_frames ), header.frameIndex, header.frameCount );
 		const hiprtInstance		   instance = fetchInstance( index );
 		const BoxNode*			   boxNodes = instance.type == hiprtInstanceTypeScene
 											  ? reinterpret_cast<SceneHeader*>( instance.scene )->m_boxNodes
 											  : reinterpret_cast<GeomHeader*>( instance.geometry )->m_boxNodes;
-		const BoxNode&			   root		= boxNodes[0];		Obb obb( matrixIndex );
-		for ( uint32_t i = 0; i < root.getChildCount(); ++i )
+		const BoxNode&			   root		= boxNodes[0];
+		
+		Obb obb( matrixIndex );
+		
+		if constexpr ( is_same<ApiFrame, SRTFrame>::value )
 		{
-			const Aabb childBox = t.motionBounds( root.getChildBox( i ) ).intersect( box );
-			if ( childBox.valid() ) obb.grow( childBox );
+			// For SRTFrame, m_frames contains converted Frame data
+			const Transform<Frame> t( static_cast<Frame*>( m_frames ), header.frameIndex, header.frameCount );
+			for ( uint32_t i = 0; i < root.getChildCount(); ++i )
+			{
+				const Aabb childBox = t.motionBounds( root.getChildBox( i ) ).intersect( box );
+				if ( childBox.valid() ) obb.grow( childBox );
+			}
+		}
+		else
+		{
+			// For MatrixFrame, use direct MatrixFrame transform
+			const Transform<ApiFrame> t( static_cast<ApiFrame*>( m_frames ), header.frameIndex, header.frameCount );
+			for ( uint32_t i = 0; i < root.getChildCount(); ++i )
+			{
+				const Aabb childBox = t.motionBounds( root.getChildBox( i ) ).intersect( box );
+				if ( childBox.valid() ) obb.grow( childBox );
+			}
 		}
 
 		if ( !obb.valid() ) obb.grow( box );
@@ -206,10 +261,19 @@ class InstanceList
 		return m_transformHeaders[index];
 	}
 
-	HIPRT_DEVICE ApiFrame fetchFrame( const uint32_t index ) const
+	HIPRT_DEVICE Frame fetchFrame( const uint32_t index ) const
 	{
-		if ( m_frameCount == 0 || m_apiFrames == nullptr || m_frames == nullptr ) return ApiFrame();
-		return static_cast<ApiFrame*>( m_frames )[index];
+		if ( m_frameCount == 0 || m_apiFrames == nullptr || m_frames == nullptr ) return Frame();
+		if constexpr ( is_same<ApiFrame, SRTFrame>::value )
+		{
+			// For SRTFrame, m_frames contains converted Frame data
+			return static_cast<Frame*>( m_frames )[index];
+		}
+		else
+		{
+			// For MatrixFrame, convert on the fly
+			return static_cast<ApiFrame*>( m_frames )[index].convert();
+		}
 	}
 
 	HIPRT_DEVICE void convertFrame( const uint32_t index ) const
@@ -240,16 +304,16 @@ class InstanceList
 
 	HIPRT_HOST_DEVICE bool copyInvTransformMatrix( const uint32_t index, float ( &matrix )[3][4] ) const
 	{
-		const ApiFrame frame = fetchFrame( index );
+		const Frame frame = fetchFrame( index );
 		if constexpr ( is_same<ApiFrame, MatrixFrame>::value )
 		{
-			// Direct matrix copy for MatrixFrame
+			// For MatrixFrame Direct path, frame is already Frame (converted from MatrixFrame)
 			return hiprt::copyInvTransformMatrix( frame, matrix );
 		}
 		else
 		{
-			// Convert to Frame first for SRTFrame
-			return hiprt::copyInvTransformMatrix( frame.convert(), matrix );
+			// For SRTFrame, frame is already Frame (converted from SRTFrame)
+			return hiprt::copyInvTransformMatrix( frame, matrix );
 		}
 	}
 

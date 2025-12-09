@@ -19,7 +19,7 @@ option(FORCE_DISABLE_CUDA "By default Cuda support is automatically added if a C
 
 
 find_program(PYTHON_EXECUTABLE
-	NAMES python
+	NAMES python python3
 	PATHS /usr/bin /usr/local/bin /opt/local/bin
 )
 message(STATUS "Python path = ${PYTHON_EXECUTABLE}")

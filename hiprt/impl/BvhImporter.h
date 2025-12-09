@@ -27,6 +27,7 @@
 #include <hiprt/impl/BvhNode.h>
 #include <hiprt/impl/Context.h>
 #include <hiprt/impl/Header.h>
+#include <hiprt/impl/InstanceList.h>
 #include <hiprt/impl/Kernel.h>
 #include <hiprt/impl/MemoryArena.h>
 #include <hiprt/impl/NodeList.h>
