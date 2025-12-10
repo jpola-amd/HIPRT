@@ -1,0 +1,19 @@
+# HIPRTConfig.cmake.in
+# Package configuration file for HIPRT
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Find HIP (if required)
+# find_dependency(HIP)
+
+# Include the targets file
+include("${CMAKE_CURRENT_LIST_DIR}/HIPRTTargets.cmake")
+
+# Set variables
+set(HIPRT_VERSION "@PROJECT_VERSION@")
+set(HIPRT_INCLUDE_DIRS "@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_INCLUDEDIR@")
+set(HIPRT_LIBRARIES hiprt)
+
+check_required_components(HIPRT)

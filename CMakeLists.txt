@@ -1,722 +1,769 @@
-cmake_minimum_required(VERSION 3.19)   # at least 3.19 in order to have the compression-level in Zstd
-project(hiprt)
+cmake_minimum_required(VERSION 3.19)
+project(HIPRT VERSION 3.0.3)
 
-#
-# Options
-#
+# ==============================================================================
+# CMake Options
+# ==============================================================================
 
-# Only one of those 3 flags should be ON at a time, or none. Multiple flags ON are untested and may cause issues.
-option(BAKE_KERNEL "Enable the use of baked kernels source code" OFF)
-option(BAKE_COMPILED_KERNEL "If enabled, the kernels will be compiled and embedded as a buffer inside the binary. if you do that, you should also enable the flag 'PRECOMPILE'" OFF)
-option(BITCODE "Enable bitcode linking: when running the program, it's expected to find precompiled kernels as external files." OFF)
+option(HIPRT_BAKE_KERNEL "Enable the use of baked kernels source code" OFF)
+option(HIPRT_BAKE_COMPILED_KERNEL "Compile and embed kernels as buffer inside binary" OFF)
+option(HIPRT_BITCODE "Enable bitcode linking (requires external precompiled kernels)" OFF)
+option(HIPRT_PRECOMPILE "Precompile kernels" OFF)
+option(HIPRT_COMPILED_COMPRESSION "Enable compression of compiled kernels" ON)
+option(HIPRT_BUILD_UNITTEST "Build unit tests" ON)
+option(HIPRT_BUILD_HIPRTEW "Build HIPRTEW test" OFF)
+option(FORCE_DISABLE_CUDA "Force disable CUDA support" OFF)
+set(HIPRT_GPU_ARCHS "" CACHE STRING "GPU architectures to build for (AMD: gfx900,gfx906,etc; NVIDIA: sm_70,sm_75,etc). Leave empty for default.")
 
-option(PRECOMPILE "Precompile kernels" OFF)
-option(HIPRTEW "Use hiprtew" OFF)
-option(NO_UNITTEST "Don't build unit tests" OFF)
-option(COMPILED_COMPRESSION "enable compression of compiled kernels" ON) # this argument is only used if BAKE_COMPILED_KERNEL is enabled -- advised to let it 'ON' as it's the path tested by the HIPRT team.
+# ==============================================================================
+# CMake Standards and Settings
+# ==============================================================================
 
-option(FORCE_DISABLE_CUDA "By default Cuda support is automatically added if a Cuda install is detected. Turn this flag to ON to force Cuda to be disabled." OFF)
-
-
-find_program(PYTHON_EXECUTABLE
-	NAMES python python3
-	PATHS /usr/bin /usr/local/bin /opt/local/bin
-)
-message(STATUS "Python path = ${PYTHON_EXECUTABLE}")
-
-
-
-# GENERATE_BAKE_KERNEL is enabled by default if we use the flags 'BAKE_KERNEL' or 'BITCODE'.
-# It can be forced to OFF, but in this case, some building functions from the HIPRT API, like hiprtBuildTraceKernelsFromBitcode will fail.
-if(BAKE_KERNEL OR BITCODE)
-	set(GENERATE_BAKE_KERNEL___DEFAULT ON)
-else()
-	set(GENERATE_BAKE_KERNEL___DEFAULT OFF)
-endif()
-option(GENERATE_BAKE_KERNEL "generate the baked kernels" ${GENERATE_BAKE_KERNEL___DEFAULT})
-message(STATUS "GENERATE_BAKE_KERNEL= ${GENERATE_BAKE_KERNEL}")
-
-
-# Set C++ Standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Define GTEST_HAS_TR1_TUPLE=0 globally
-add_definitions(-DGTEST_HAS_TR1_TUPLE=0)
-
-
-
-
-
-
-
-# Functions
-function(copy_dir src_dir dst_dir pattern)
-	file(GLOB_RECURSE files "${src_dir}/${pattern}")
-	foreach(file ${files})
-		file(RELATIVE_PATH rel_file ${src_dir} ${file})
-		set(target "${dst_dir}/${rel_file}")
-		get_filename_component(target_dir ${target} DIRECTORY)
-		file(MAKE_DIRECTORY ${target_dir})
-		file(COPY ${file} DESTINATION ${target_dir})
-	endforeach()
-endfunction()
-
-
-
-function(file_exists file)
-	if(EXISTS ${file})
-		return(0)
-	else()
-		return(1)
-	endif()
-endfunction()
-
-function(read_file file)
-	file(READ ${file} content)
-	return(${content})
-endfunction()
-
-
-
-function(get_version file)
-	file(STRINGS ${file} lines)
-	list(GET lines 0 major)
-	list(GET lines 1 minor)
-	list(GET lines 2 patch)
-	list(GET lines 3 hash)
-	set(patch_hex "0x${hash}")
-	set(major ${major} PARENT_SCOPE)
-	set(minor ${minor} PARENT_SCOPE)
-	set(patch ${patch} PARENT_SCOPE)
-	set(hash ${patch_hex} PARENT_SCOPE)
-endfunction()
-
-
-
-# Remove the last character from the string if it's a / or \\  
-function(remove_trailing_slash strInOut)
-	string(LENGTH "${${strInOut}}" strLength)
-	math(EXPR lastIndex "${strLength} - 1")
-	string(SUBSTRING "${${strInOut}}" ${lastIndex} 1 lastChar)
-	if("${lastChar}" STREQUAL "\\" OR "${lastChar}" STREQUAL "/")
-		string(SUBSTRING "${${strInOut}}" 0 ${lastIndex} strInOut_modified)
-		set(${strInOut} "${strInOut_modified}" PARENT_SCOPE)
-	endif()
-endfunction()
-
-
-
-
-# 'result'      is the HIP version as string, for example: 6.2
-# 'result_path' is the output of the path to HIP, for example:  C:\Program Files\AMD\ROCm\6.2
-function(get_hip_sdk_version result result_path)
-	if(WIN32)
-		set(root ".\\")
-	endif()
-
-	set(exec_perl "")
-	set(hipCommand "hipcc")
-	set(PATH $ENV{PATH})
-	set(useHipFromPATH OFF)
-
-
-	# Check if HIP_PATH is defined as a CMake parameter
-	if(DEFINED HIP_PATH)
-		message(STATUS "HIP_PATH is defined as a CMake parameter: ${HIP_PATH}")
-
-	# Check if HIP_PATH is defined as an environment variable
-	elseif(DEFINED ENV{HIP_PATH})
-		
-		set(HIP_PATH $ENV{HIP_PATH})
-		message(STATUS "HIP_PATH is defined as an environment variable: ${HIP_PATH}")
-			
-	# if HIP_PATH is not in cmake, and not in environment variable
-	else()
-		message(WARNING "WARNING: HIP_PATH is not defined as a CMake parameter or an environment variable - NOT RECOMMENDED")
-
-		# TODO: improve that, but it's not recommanded to use the cmake script without defining HIP_PATH anyway...
-		set(${result_path} "UNKONWN_PATH" PARENT_SCOPE)
-
-		# Check if HIP is in the PATH environment variable
-		string(REPLACE ";" "\n" PATH_LIST ${PATH})
-		foreach(token ${PATH_LIST})
-			if("${token}" MATCHES "hip")
-				if(EXISTS "${token}/hipcc")
-					set(useHipFromPATH ON)
-				endif()
-			endif()
-		endforeach()
-
-
-	endif()
-
-
-	# clean/format HIP_PATH here.
-	if ( HIP_PATH )
-		remove_trailing_slash(HIP_PATH)
-		# message(STATUS "HIP_PATH formatted: ${HIP_PATH}")
-		set(${result_path} ${HIP_PATH} PARENT_SCOPE)
-	endif()
-
-
-	# build hip command for Windows
-	if(WIN32)
-		set(exec_perl "perl")
-
-		if(NOT HIP_PATH)
-			if(useHipFromPATH)
-				set(hipCommand "hipcc")
-			else()
-				# use special path used by HIPRT developers
-				if(EXISTS "hipSdk\\bin\\hipcc.exe")
-					set(exec_perl "")
-					set(hipCommand "hipSdk\\bin\\hipcc.exe")
-				else()
-					set(hipCommand "hipSdk\\bin\\hipcc")
-				endif()
-			endif()
-		else()
-		
-			# HIP_PATH is expected to look like: C:\Program Files\AMD\ROCm\5.7
-			
-			if(EXISTS "${HIP_PATH}\\bin\\hipcc.exe")
-				# in newer version of HIP SDK (>= 6.3), we are using 'hipcc.exe --version' to check the version
-				# message(STATUS "using hipcc.exe to get the version")
-				set(exec_perl "")
-				set(hipCommand "${HIP_PATH}\\bin\\hipcc.exe")
-			else()
-				# in older version of HIP SDK, we are using 'perl hipcc --version' to check the version
-				# message(STATUS "using perl hipcc to get the version")
-				set(hipCommand "${HIP_PATH}\\bin\\${hipCommand}")
-			endif()
-
-
-		endif()
-	
-	# build hip command for Linux
-	else()
-	
-		# If not defined we try to take it from the PATH
-		if(NOT HIP_PATH)
-			set(hipCommand "hipcc")
-			
-		# otherwise, build the hipcc command with full path.
-		else()
-			set(hipCommand "${HIP_PATH}/bin/${hipCommand}")
-		endif()
-	endif()
-
-
-	file(WRITE ${CMAKE_BINARY_DIR}/hip_version_tmp.txt "")
-
-	# message(STATUS "hipCommand : ${hipCommand}")
-	# message(STATUS "CMAKE_CURRENT_SOURCE_DIR: ${CMAKE_CURRENT_SOURCE_DIR}")
-
-	execute_process(
-		COMMAND ${exec_perl} "${hipCommand}" --version
-		OUTPUT_FILE ${CMAKE_BINARY_DIR}/hip_version_tmp.txt
-		# ERROR_QUIET
-		WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-		)
-
-	file(READ ${CMAKE_BINARY_DIR}/hip_version_tmp.txt version_output)
-	string(REGEX MATCH "[0-9]+\\.[0-9]+" version "${version_output}")
-
-	file(REMOVE ${CMAKE_BINARY_DIR}/hip_version_tmp.txt)
-
-	if(NOT version)
-		set(version "HIP_SDK_NOT_FOUND")
-	endif()
-
-	message(STATUS "HIP VERSION from command : ${version}")
-	set(${result} ${version} PARENT_SCOPE)
-endfunction()
-
-
-# fill the HIP_VERSION_STR variable, it will look like: "6.2"
-# also get the path to hip that'll be used along all this cmake.
-get_hip_sdk_version(HIP_VERSION_STR HIP_FINAL_PATH)
-message(STATUS "HIP_VERSION_STR = ${HIP_VERSION_STR}")
-message(STATUS "HIP_FINAL_PATH = ${HIP_FINAL_PATH}")
-
-function(write_version_info in_file header_file version_file version_str_out)
-
-	if(NOT EXISTS ${version_file})
-		message(FATAL_ERROR "Version.txt file missing!")
-	endif()
-	if(NOT EXISTS ${in_file})
-		message(FATAL_ERROR "${in_file} file is missing!")
-	endif()
-
-	# Read version file and extract version information
-	get_version(${version_file})
-
-	# set(version "${major}${minor}")
-	# set(version_str "${version}_${hash}")
-
-	# Read the content of the header template file
-	file(READ ${in_file} header_content)
-
-	# Calculate HIPRT_API_VERSION
-	math(EXPR HIPRT_VERSION "${major} * 1000 + ${minor}")
-
-
-	# Format version_str as a zero-padded 5-digit string
-	string(LENGTH "${HIPRT_VERSION}" HIPRT_VERSION_LEN)
-	if(${HIPRT_VERSION_LEN} LESS 5)
-		math(EXPR HIPRT_VERSION_PAD "5 - ${HIPRT_VERSION_LEN}")
-		string(REPEAT "0" ${HIPRT_VERSION_PAD} HIPRT_VERSION_PADDED)
-		set(version_str "${HIPRT_VERSION_PADDED}${HIPRT_VERSION}" )
-	else()
-		set(version_str "${HIPRT_VERSION}" )
-	endif()
-
-	# message(STATUS "HIPRT_API_VERSION: ${version_str}_${hash}")
-
-	set(HIPRT_API_VERSION ${HIPRT_VERSION})
-
-	# Replace placeholders with actual version values
-	string(REPLACE "@HIPRT_MAJOR_VERSION@" "${major}" header_content "${header_content}")
-	string(REPLACE "@HIPRT_MINOR_VERSION@" "${minor}" header_content "${header_content}")
-	string(REPLACE "@HIPRT_PATCH_VERSION@" "${patch}" header_content "${header_content}")
-	string(REPLACE "@HIPRT_HASH_VERSION@" "${hash}" header_content "${header_content}")
-	string(REPLACE "@HIPRT_VERSION_STR@" "\"${version_str}\"" header_content "${header_content}")
-	string(REPLACE "@HIPRT_API_VERSION@" "${HIPRT_API_VERSION}" header_content "${header_content}")
-
-	# Get HIP SDK version and replace placeholder
-	string(REPLACE "@HIP_VERSION_STR@" "\"${HIP_VERSION_STR}\"" header_content "${header_content}")
-
-	# Write the modified content to the header file
-	file(WRITE ${header_file} "${header_content}")
-
-	set(${version_str_out} ${version_str} PARENT_SCOPE)
-endfunction()
-
-
-# Set up configurations
-set(CMAKE_CONFIGURATION_TYPES "Debug;Release;RelWithDebInfo;DebugGpu" CACHE STRING "Configs" FORCE)
-
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Use standard output directories
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
+# Multi-config generators
+foreach(OUTPUTCONFIG Debug Release RelWithDebInfo MinSizeRel DebugGpu)
+    string(TOUPPER ${OUTPUTCONFIG} OUTPUTCONFIG_UPPER)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} ${CMAKE_BINARY_DIR}/bin/${OUTPUTCONFIG})
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} ${CMAKE_BINARY_DIR}/lib/${OUTPUTCONFIG})
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} ${CMAKE_BINARY_DIR}/lib/${OUTPUTCONFIG})
+endforeach()
+
+# Build type configurations
+set(CMAKE_CONFIGURATION_TYPES "Debug;Release;RelWithDebInfo;DebugGpu" CACHE STRING "Build configurations" FORCE)
 set(CMAKE_SHARED_LINKER_FLAGS_DEBUGGPU "")
 set(CMAKE_EXE_LINKER_FLAGS_DEBUGGPU "")
 
-# Define platform-specific flags and settings
+# ==============================================================================
+# Platform-Specific Settings
+# ==============================================================================
+
 if(WIN32)
-	add_definitions(-D__WINDOWS__)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4305 /wd4018 /wd4996 /Zc:__cplusplus")
+    add_compile_definitions(__WINDOWS__)
+    add_compile_options(/wd4244 /wd4305 /wd4018 /wd4996 /Zc:__cplusplus /EHsc)
 elseif(UNIX)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
+    add_compile_options(-fvisibility=hidden)
 endif()
 
-add_definitions(-D__USE_HIP__)
+add_compile_definitions(__USE_HIP__ HIPRT_PUBLIC_REPO GTEST_HAS_TR1_TUPLE=0)
 
+# ==============================================================================
+# Find HIP SDK
+# ==============================================================================
 
-# this define is to identify that we are on the public repository of HIPRT.
-# it helps AMD to maintain both a public and a private repo for experimentation.
-add_definitions(-DHIPRT_PUBLIC_REPO)
+function(get_hip_version result_version result_path)
+    set(hip_command "hipcc")
+    
+    if(DEFINED HIP_PATH)
+        message(STATUS "HIP_PATH defined as CMake parameter: ${HIP_PATH}")
+        set(hip_root "${HIP_PATH}")
+    elseif(DEFINED ENV{HIP_PATH})
+        set(hip_root "$ENV{HIP_PATH}")
+        message(STATUS "HIP_PATH from environment: ${hip_root}")
+    else()
+        message(WARNING "HIP_PATH not defined - will search in PATH")
+        set(hip_root "")
+    endif()
+    
+    if(hip_root)
+        # Clean trailing slashes
+        string(REGEX REPLACE "[/\\]$" "" hip_root "${hip_root}")
+        set(${result_path} "${hip_root}" PARENT_SCOPE)
+        
+        if(WIN32)
+            if(EXISTS "${hip_root}/bin/hipcc.exe")
+                set(hip_command "${hip_root}/bin/hipcc.exe")
+            else()
+                set(hip_command "perl" "${hip_root}/bin/hipcc")
+            endif()
+        else()
+            set(hip_command "${hip_root}/bin/hipcc")
+        endif()
+    endif()
+    
+    execute_process(
+        COMMAND ${hip_command} --version
+        OUTPUT_VARIABLE version_output
+        ERROR_QUIET
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    
+    string(REGEX MATCH "[0-9]+\\.[0-9]+" version "${version_output}")
+    
+    if(NOT version)
+        set(version "UNKNOWN")
+    endif()
+    
+    message(STATUS "HIP version: ${version}")
+    set(${result_version} "${version}" PARENT_SCOPE)
+endfunction()
 
+get_hip_version(HIP_VERSION_STR HIP_PATH_DETECTED)
 
-if (NOT FORCE_DISABLE_CUDA)
-	# Enable CUDA if possible
-	include(${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/Orochi/enable_cuew.cmake)
+# ==============================================================================
+# Version Management
+# ==============================================================================
+
+function(configure_version_header in_file out_file version_file)
+    if(NOT EXISTS "${version_file}")
+        message(FATAL_ERROR "Version file missing: ${version_file}")
+    endif()
+    
+    file(STRINGS "${version_file}" version_lines)
+    list(GET version_lines 0 major)
+    list(GET version_lines 1 minor)
+    list(GET version_lines 2 patch)
+    list(GET version_lines 3 hash)
+    
+    math(EXPR api_version "${major} * 1000 + ${minor}")
+    
+    # Format version as 5-digit string
+    string(LENGTH "${api_version}" version_len)
+    if(version_len LESS 5)
+        math(EXPR pad_len "5 - ${version_len}")
+        string(REPEAT "0" ${pad_len} version_pad)
+        set(version_str "${version_pad}${api_version}")
+    else()
+        set(version_str "${api_version}")
+    endif()
+    
+    set(HIPRT_VERSION_STRING "${version_str}" PARENT_SCOPE)
+    
+    file(READ "${in_file}" content)
+    string(REPLACE "@HIPRT_MAJOR_VERSION@" "${major}" content "${content}")
+    string(REPLACE "@HIPRT_MINOR_VERSION@" "${minor}" content "${content}")
+    string(REPLACE "@HIPRT_PATCH_VERSION@" "${patch}" content "${content}")
+    string(REPLACE "@HIPRT_HASH_VERSION@" "0x${hash}" content "${content}")
+    string(REPLACE "@HIPRT_VERSION_STR@" "\"${version_str}\"" content "${content}")
+    string(REPLACE "@HIPRT_API_VERSION@" "${api_version}" content "${content}")
+    string(REPLACE "@HIP_VERSION_STR@" "\"${HIP_VERSION_STR}\"" content "${content}")
+    
+    file(WRITE "${out_file}" "${content}")
+endfunction()
+
+# Generate version headers
+configure_version_header(
+    "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/hiprt.h.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/hiprt.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/version.txt"
+)
+configure_version_header(
+    "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/hiprtew.h.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/hiprtew.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/version.txt"
+)
+
+set(HIPRT_LIB_NAME "hiprt${HIPRT_VERSION_STRING}")
+
+# ==============================================================================
+# CUDA Support
+# ==============================================================================
+
+if(NOT FORCE_DISABLE_CUDA)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/Orochi/enable_cuew.cmake)
 else()
-	message(STATUS "CUDA support is forced to disabled.")
+    message(STATUS "CUDA support disabled")
 endif()
 
+# ==============================================================================
+# CMake Utilities for Kernel Generation
+# ==============================================================================
 
-# Base output directory
-set(BASE_OUTPUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dist/bin)
-file(MAKE_DIRECTORY "${BASE_OUTPUT_DIR}/Debug")
-file(MAKE_DIRECTORY "${BASE_OUTPUT_DIR}/Release")
+# Stringify function - converts header files to C string literals
+function(stringify_file input_file output_file)
+    file(READ "${input_file}" file_content)
+    
+    # Remove comments and process includes
+    string(REGEX REPLACE "//[^\n]*\n" "" file_content "${file_content}")
+    
+    # Convert to C string
+    string(REPLACE "\\" "\\\\" file_content "${file_content}")
+    string(REPLACE "\"" "\\\"" file_content "${file_content}")
+    string(REGEX REPLACE "\n" "\\\\n\"\n\"" file_content "${file_content}")
+    
+    get_filename_component(var_name "${input_file}" NAME_WE)
+    set(output_content "static const char* hip_${var_name} = \n\"${file_content}\";\n")
+    
+    file(APPEND "${output_file}" "${output_content}")
+endfunction()
 
-# Set output directories for each build configuration
-foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES} Debug Release RelWithDebInfo MinSizeRel)
-	string(TOUPPER ${OUTPUTCONFIG} OUTPUTCONFIG_UPPER)
-	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} ${BASE_OUTPUT_DIR}/${OUTPUTCONFIG})
-	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} ${BASE_OUTPUT_DIR}/${OUTPUTCONFIG})
-	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} ${BASE_OUTPUT_DIR}/${OUTPUTCONFIG})
-endforeach()
+# Generate kernel args
+function(generate_kernel_args input_file output_file)
+    file(READ "${input_file}" content)
+    get_filename_component(var_name "${input_file}" NAME_WE)
+    
+    file(APPEND "${output_file}" "#if !defined(HIPRT_LOAD_FROM_STRING) && !defined(HIPRT_BITCODE_LINKING)\n")
+    file(APPEND "${output_file}" "    static const char** ${var_name}Args = 0;\n")
+    file(APPEND "${output_file}" "#else\n")
+    file(APPEND "${output_file}" "    static const char* ${var_name}Args[] = {\n")
+    
+    # Extract includes
+    string(REGEX MATCHALL "#include <[^>]+>" includes "${content}")
+    foreach(inc ${includes})
+        string(REGEX REPLACE "#include <([^>]+)>" "hip_\\1" inc_name "${inc}")
+        string(REPLACE ".h" "" inc_name "${inc_name}")
+        file(APPEND "${output_file}" "        ${inc_name},\n")
+    endforeach()
+    
+    file(APPEND "${output_file}" "        hip_${var_name}};\n")
+    file(APPEND "${output_file}" "#endif\n\n")
+endfunction()
 
-# Set output directories for single-configuration generators
-if(NOT CMAKE_CONFIGURATION_TYPES)
-	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE})
-	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE})
-	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE})
-endif()
+# ==============================================================================
+# Kernel Baking Target (String Embedding)
+# ==============================================================================
 
+set(BAKED_KERNEL_HEADERS
+    hiprt/hiprt_vec.h
+    hiprt/hiprt_math.h
+    hiprt/impl/Obb.h
+    hiprt/impl/Aabb.h
+    hiprt/impl/AabbList.h
+    hiprt/impl/BvhCommon.h
+    hiprt/impl/BvhNode.h
+    hiprt/impl/Header.h
+    hiprt/impl/QrDecomposition.h
+    hiprt/impl/Quaternion.h
+    hiprt/impl/Transform.h
+    hiprt/impl/Instance.h
+    hiprt/impl/InstanceList.h
+    hiprt/impl/MortonCode.h
+    hiprt/impl/TriangleMesh.h
+    hiprt/impl/Triangle.h
+    hiprt/impl/BvhBuilderUtil.h
+    hiprt/impl/SbvhCommon.h
+    hiprt/impl/NodeList.h
+    hiprt/impl/BvhConfig.h
+    hiprt/impl/MemoryArena.h
+    hiprt/hiprt_types.h
+    hiprt/hiprt_common.h
+    hiprt/impl/hiprt_device_impl.h
+    hiprt/hiprt_device.h
+)
 
+set(OROCHI_KERNEL_HEADERS
+    contrib/Orochi/ParallelPrimitives/RadixSortKernels.h
+    contrib/Orochi/ParallelPrimitives/RadixSortConfigs.h
+)
 
+set(HIPRT_KERNEL_OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/cache/Kernels.h")
+set(HIPRT_KERNELARGS_OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/cache/KernelArgs.h")
+set(OROCHI_KERNEL_OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/cache/Kernels.h")
+set(OROCHI_KERNELARGS_OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/cache/KernelArgs.h")
 
-# Write version info
-set(version_str_ "UNDEF")
-write_version_info("${CMAKE_CURRENT_SOURCE_DIR}/hiprt/hiprt.h.in" "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/hiprt.h" "${CMAKE_CURRENT_SOURCE_DIR}/version.txt" version_str_)
-write_version_info("${CMAKE_CURRENT_SOURCE_DIR}/hiprt/hiprtew.h.in" "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/hiprtew.h" "${CMAKE_CURRENT_SOURCE_DIR}/version.txt" version_str_)
-
-
-set(HIPRT_NAME "hiprt${version_str_}")
-
-# Project: HIPRT
-add_library(${HIPRT_NAME} SHARED)
-
-target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_EXPORTS)
-
-
-if( ${CMAKE_BUILD_TYPE} STREQUAL "Debug" )
-	set_target_properties(${HIPRT_NAME} PROPERTIES OUTPUT_NAME "${HIPRT_NAME}64D")
+if(HIPRT_BAKE_KERNEL OR HIPRT_BITCODE)
+    set(GENERATE_BAKED_KERNEL ON)
 else()
-	set_target_properties(${HIPRT_NAME} PROPERTIES OUTPUT_NAME "${HIPRT_NAME}64")
+    set(GENERATE_BAKED_KERNEL OFF)
 endif()
 
-
-if(BITCODE)
-	target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_BITCODE_LINKING ORO_PRECOMPILED)
+if(GENERATE_BAKED_KERNEL)
+    # Prepare absolute paths
+    set(HIPRT_KERNEL_HEADERS_ABS)
+    foreach(header ${BAKED_KERNEL_HEADERS})
+        list(APPEND HIPRT_KERNEL_HEADERS_ABS "${CMAKE_CURRENT_SOURCE_DIR}/${header}")
+    endforeach()
+    
+    set(OROCHI_KERNEL_HEADERS_ABS)
+    foreach(header ${OROCHI_KERNEL_HEADERS})
+        list(APPEND OROCHI_KERNEL_HEADERS_ABS "${CMAKE_CURRENT_SOURCE_DIR}/${header}")
+    endforeach()
+    
+    add_custom_command(
+        OUTPUT 
+            "${HIPRT_KERNEL_OUTPUT}"
+            "${HIPRT_KERNELARGS_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND} -E echo "// Automatically generated, do not edit" > "${HIPRT_KERNEL_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND} -E echo "// Automatically generated, do not edit" > "${HIPRT_KERNELARGS_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND} -E echo "\#pragma once" >> "${HIPRT_KERNEL_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND} -E echo "\#pragma once" >> "${HIPRT_KERNELARGS_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND}
+            -DINPUT_FILES="${HIPRT_KERNEL_HEADERS_ABS}"
+            -DOUTPUT_KERNEL="${HIPRT_KERNEL_OUTPUT}"
+            -DOUTPUT_ARGS="${HIPRT_KERNELARGS_OUTPUT}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/StringifyKernels.cmake"
+        DEPENDS ${HIPRT_KERNEL_HEADERS_ABS}
+        COMMENT "Generating baked HIPRT kernels"
+        VERBATIM
+    )
+    
+    add_custom_command(
+        OUTPUT 
+            "${OROCHI_KERNEL_OUTPUT}"
+            "${OROCHI_KERNELARGS_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND} -E echo "// Automatically generated, do not edit" > "${OROCHI_KERNEL_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND} -E echo "// Automatically generated, do not edit" > "${OROCHI_KERNELARGS_OUTPUT}"
+        COMMAND ${CMAKE_COMMAND}
+            -DINPUT_FILES="${OROCHI_KERNEL_HEADERS_ABS}"
+            -DOUTPUT_KERNEL="${OROCHI_KERNEL_OUTPUT}"
+            -DOUTPUT_ARGS="${OROCHI_KERNELARGS_OUTPUT}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/StringifyKernels.cmake"
+        DEPENDS ${OROCHI_KERNEL_HEADERS_ABS}
+        COMMENT "Generating baked Orochi kernels"
+        VERBATIM
+    )
+    
+    add_custom_target(bake_kernels
+        DEPENDS 
+            "${HIPRT_KERNEL_OUTPUT}"
+            "${HIPRT_KERNELARGS_OUTPUT}"
+            "${OROCHI_KERNEL_OUTPUT}"
+            "${OROCHI_KERNELARGS_OUTPUT}"
+    )
 endif()
 
+# ==============================================================================
+# Kernel Precompilation (HIP Compilation)
+# ==============================================================================
 
+if(HIPRT_PRECOMPILE)
+    # Determine OS postfix
+    if(WIN32)
+        set(KERNEL_OS_POSTFIX "win")
+    else()
+        set(KERNEL_OS_POSTFIX "linux")
+    endif()
+    
+    # Output files for precompiled kernels
+    set(KERNEL_HIPRT_COMP "${CMAKE_BINARY_DIR}/bin/hiprt${HIPRT_VERSION_STRING}_${HIP_VERSION_STR}_amd.hipfb")
+    set(KERNEL_OROCHI_COMP "${CMAKE_BINARY_DIR}/bin/oro_compiled_kernels.hipfb")
+    set(KERNEL_UNITTEST_COMP "${CMAKE_BINARY_DIR}/bin/hiprt${HIPRT_VERSION_STRING}_${HIP_VERSION_STR}_precompiled_bitcode_${KERNEL_OS_POSTFIX}.hipfb")
+    
+    # Kernel source files
+    set(BVH_SOURCES
+        ${CMAKE_SOURCE_DIR}/hiprt/hiprt_vec.h
+        ${CMAKE_SOURCE_DIR}/hiprt/hiprt_math.h
+        ${CMAKE_SOURCE_DIR}/hiprt/impl/Aabb.h
+        ${CMAKE_SOURCE_DIR}/hiprt/impl/BvhCommon.h
+        ${CMAKE_SOURCE_DIR}/hiprt/impl/BvhNode.h
+        ${CMAKE_SOURCE_DIR}/hiprt/hiprt_types.h
+        ${CMAKE_SOURCE_DIR}/hiprt/hiprt_common.h
+    )
+    
+    # Find hipcc
+    if(HIP_PATH_DETECTED)
+        if(WIN32)
+            find_program(HIPCC_EXECUTABLE
+                NAMES hipcc.exe hipcc
+                PATHS "${HIP_PATH_DETECTED}/bin"
+                NO_DEFAULT_PATH
+            )
+        else()
+            find_program(HIPCC_EXECUTABLE
+                NAMES hipcc
+                PATHS "${HIP_PATH_DETECTED}/bin"
+                NO_DEFAULT_PATH
+            )
+        endif()
+    else()
+        find_program(HIPCC_EXECUTABLE NAMES hipcc)
+    endif()
+    
+    if(NOT HIPCC_EXECUTABLE)
+        message(FATAL_ERROR "hipcc not found. Please set HIP_PATH.")
+    endif()
+    
+    message(STATUS "Using hipcc: ${HIPCC_EXECUTABLE}")
+    
+    # Determine GPU architectures based on HIP version
+    string(REPLACE "." ";" HIP_VERSION_LIST ${HIP_VERSION_STR})
+    list(GET HIP_VERSION_LIST 0 HIP_MAJOR)
+    list(GET HIP_VERSION_LIST 1 HIP_MINOR)
+    math(EXPR HIP_VERSION_NUM "${HIP_MAJOR} * 10 + ${HIP_MINOR}")
+    
+    # GPU architectures - use custom list if provided, otherwise use defaults
+    if(HIPRT_GPU_ARCHS)
+        # User provided custom architectures
+        string(REPLACE "," ";" GPU_ARCHS "${HIPRT_GPU_ARCHS}")
+        message(STATUS "Using custom GPU architectures: ${GPU_ARCHS}")
+    else()
+        # Default AMD GPU architectures
+        set(GPU_ARCHS "gfx900;gfx906;gfx908;gfx90a;gfx1030;gfx1100;gfx1101;gfx1102")
+        message(STATUS "Using default GPU architectures: ${GPU_ARCHS}")
+    endif()
+    
+    # Build offload arch arguments
+    set(OFFLOAD_ARCHS)
+    foreach(arch ${GPU_ARCHS})
+        # Handle both AMD (gfx) and NVIDIA (sm_) architectures
+        message(STATUS "Adding architecture: ${arch}")
+        if(arch MATCHES "^sm_")
+            # NVIDIA architecture - hipcc expects --offload-arch=sm_XX format
+            list(APPEND OFFLOAD_ARCHS "--offload-arch=${arch}")
+        else()
+            # AMD architecture - standard gfx format
+            list(APPEND OFFLOAD_ARCHS "--offload-arch=${arch}")
+        endif()
+    endforeach()
+    message(STATUS "Final OFFLOAD_ARCHS: ${OFFLOAD_ARCHS}")
+    # CUDA support
+    if(NOT FORCE_DISABLE_CUDA)
+        set(CUDA_COMPILE_FLAG "--nvidia")
+    else()
+        set(CUDA_COMPILE_FLAG "")
+    endif()
+    
+    # Custom command to compile kernels using hipcc
+    # Escape the list for passing to child CMake script
+    string(REPLACE ";" "\\;" OFFLOAD_ARCHS_ESCAPED "${OFFLOAD_ARCHS}")
+    
+    add_custom_command(
+        OUTPUT "${KERNEL_HIPRT_COMP}" "${KERNEL_OROCHI_COMP}"
+        COMMAND ${CMAKE_COMMAND}
+            -DHIPCC_EXECUTABLE=${HIPCC_EXECUTABLE}
+            -DHIP_PATH=${HIP_PATH_DETECTED}
+            -DOFFLOAD_ARCHS="${OFFLOAD_ARCHS_ESCAPED}"
+            -DCUDA_FLAG=${CUDA_COMPILE_FLAG}
+            -DOUTPUT_HIPRT=${KERNEL_HIPRT_COMP}
+            -DOUTPUT_OROCHI=${KERNEL_OROCHI_COMP}
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompileKernels.cmake"
+        DEPENDS ${BVH_SOURCES}
+        COMMENT "Precompiling HIPRT kernels with hipcc"
+        VERBATIM
+    )
+    
+    add_custom_target(precompile_kernels ALL
+        DEPENDS "${KERNEL_HIPRT_COMP}" "${KERNEL_OROCHI_COMP}"
+    )
+    
+    # Unittest kernels
+    if(HIPRT_BUILD_UNITTEST)
+        set(UNITTEST_SOURCES
+            ${CMAKE_SOURCE_DIR}/test/bitcodes/custom_func_table.cpp
+            ${CMAKE_SOURCE_DIR}/test/bitcodes/unit_test.cpp
+        )
+        
+        # HIPRT lib bitcode path (temporary file created during kernel compilation)
+        set(HIPRT_LIB_BC_PATH "${CMAKE_BINARY_DIR}/bin/hiprt_lib.bc")
+        
+        add_custom_command(
+            OUTPUT "${KERNEL_UNITTEST_COMP}"
+            COMMAND ${CMAKE_COMMAND}
+                -DHIPCC_EXECUTABLE=${HIPCC_EXECUTABLE}
+                -DHIP_PATH=${HIP_PATH_DETECTED}
+                "-DOFFLOAD_ARCHS=${OFFLOAD_ARCHS_ESCAPED}"
+                -DCUDA_FLAG=${CUDA_COMPILE_FLAG}
+                -DOUTPUT_UNITTEST=${KERNEL_UNITTEST_COMP}
+                -DHIPRT_LIB_BC=${HIPRT_LIB_BC_PATH}
+                -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompileUnittestKernels.cmake"
+            DEPENDS "${KERNEL_HIPRT_COMP}" ${UNITTEST_SOURCES}
+            COMMENT "Precompiling unittest kernels"
+            VERBATIM
+        )
+        
+        add_custom_target(precompile_unittest_kernels ALL
+            DEPENDS "${KERNEL_UNITTEST_COMP}"
+        )
+    endif()
+endif()
 
-# files generated by compile.py and precompile_bitcode.py
-if(WIN32)
-	set(KERNEL_OS_POSTFIX "win")
+# ==============================================================================
+# Compiled Kernel Embedding
+# ==============================================================================
+
+if(HIPRT_BAKE_COMPILED_KERNEL)
+    set(KERNEL_HIPRT_H "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/impl/bvh_build_array.h")
+    set(KERNEL_OROCHI_H "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/cache/oro_compiled_kernels.h")
+    
+    set(KERNEL_HIPRT_COMP_COMPRESSED "${CMAKE_BINARY_DIR}/hiprt${HIPRT_VERSION_STRING}_${HIP_VERSION_STR}_amd.zstd")
+    set(KERNEL_OROCHI_COMP_COMPRESSED "${CMAKE_BINARY_DIR}/oro_compiled_kernels.zstd")
+    
+    # Convert compiled kernel to header
+    add_custom_command(
+        OUTPUT "${KERNEL_HIPRT_H}"
+        COMMAND ${CMAKE_COMMAND}
+            -DINPUT_FILE=${KERNEL_HIPRT_COMP}
+            -DOUTPUT_COMPRESSED=${KERNEL_HIPRT_COMP_COMPRESSED}
+            -DOUTPUT_HEADER=${KERNEL_HIPRT_H}
+            -DDO_COMPRESS=${HIPRT_COMPILED_COMPRESSION}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedKernel.cmake"
+        DEPENDS "${KERNEL_HIPRT_COMP}"
+        COMMENT "Embedding HIPRT compiled kernel"
+        VERBATIM
+    )
+    
+    add_custom_command(
+        OUTPUT "${KERNEL_OROCHI_H}"
+        COMMAND ${CMAKE_COMMAND}
+            -DINPUT_FILE=${KERNEL_OROCHI_COMP}
+            -DOUTPUT_COMPRESSED=${KERNEL_OROCHI_COMP_COMPRESSED}
+            -DOUTPUT_HEADER=${KERNEL_OROCHI_H}
+            -DDO_COMPRESS=${HIPRT_COMPILED_COMPRESSION}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedKernel.cmake"
+        DEPENDS "${KERNEL_OROCHI_COMP}"
+        COMMENT "Embedding Orochi compiled kernel"
+        VERBATIM
+    )
+    
+    add_custom_target(bake_compiled_kernels ALL
+        DEPENDS "${KERNEL_HIPRT_H}" "${KERNEL_OROCHI_H}" precompile_kernels
+    )
+endif()
+
+# ==============================================================================
+# HIPRT Library Target
+# ==============================================================================
+
+add_library(${HIPRT_LIB_NAME} SHARED)
+
+# Output name
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set_target_properties(${HIPRT_LIB_NAME} PROPERTIES OUTPUT_NAME "${HIPRT_LIB_NAME}64D")
 else()
-	set(KERNEL_OS_POSTFIX "linux")
-endif()
-set(KERNEL_HIPRT_COMP    "${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE}/hiprt${version_str_}_${HIP_VERSION_STR}_amd.hipfb")                                        # example:  hiprt02005_6.2_amd.hipfb
-set(KERNEL_UNITTEST_COMP "${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE}/hiprt${version_str_}_${HIP_VERSION_STR}_precompiled_bitcode_${KERNEL_OS_POSTFIX}.hipfb")   # example:  hiprt02005_6.2_precompiled_bitcode_win.hipfb
-set(KERNEL_OROCHI_COMP "${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE}/oro_compiled_kernels.hipfb")
-
-# temp files: compiled kernel, compressed.
-set(KERNEL_HIPRT_COMP_COMPRESSED  "${CMAKE_BINARY_DIR}/hiprt${version_str_}_${HIP_VERSION_STR}_amd.zstd" )
-set(KERNEL_OROCHI_COMP_COMPRESSED  "${CMAKE_BINARY_DIR}/oro_compiled_kernels.zstd" )
-
-
-# precompile kernels:
-if(PRECOMPILE)
-
-	if(FORCE_DISABLE_CUDA)
-		set(CUDA_OPTION "")
-	else()
-		set(CUDA_OPTION "--nvidia")
-	endif()
-
-
-	set(bvh_source
-	${CMAKE_SOURCE_DIR}/hiprt/hiprt_vec.h
-	${CMAKE_SOURCE_DIR}/hiprt/hiprt_math.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/Aabb.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/AabbList.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/BvhCommon.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/BvhNode.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/QrDecomposition.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/Quaternion.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/Transform.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/Instance.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/InstanceList.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/MortonCode.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/Header.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/TriangleMesh.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/Triangle.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/BvhBuilderUtil.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/SbvhCommon.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/BvhConfig.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/NodeList.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/MemoryArena.h
-	${CMAKE_SOURCE_DIR}/hiprt/impl/Obb.h
-	${CMAKE_SOURCE_DIR}/hiprt/hiprt_types.h
-	${CMAKE_SOURCE_DIR}/hiprt/hiprt_common.h
-	)
-
-	message(">> add_custom_command: ${PYTHON_EXECUTABLE} compile.py ${CUDA_OPTION} --hipSdkPath \"${HIP_FINAL_PATH}\"")
-	add_custom_command(
-			OUTPUT ${KERNEL_HIPRT_COMP} ${KERNEL_OROCHI_COMP}
-			COMMAND ${PYTHON_EXECUTABLE} compile.py ${CUDA_OPTION} --hipSdkPath ${HIP_FINAL_PATH}
-			WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/scripts/bitcodes
-			COMMENT "Precompiling kernels via compile.py"
-			VERBATIM
-			DEPENDS ${bvh_source}
-		)
-		
-	# create the 'precompile_kernels' project
-	add_custom_target(precompile_kernels ALL
-		DEPENDS ${KERNEL_HIPRT_COMP} ${KERNEL_OROCHI_COMP}
-		)
-	
-	if(NOT NO_UNITTEST)
-
-		set(unittest_kernel_source
-		${CMAKE_SOURCE_DIR}/test/bitcodes/custom_func_table.cpp
-		${CMAKE_SOURCE_DIR}/test/bitcodes/unit_test.cpp
-		)
-		
-		message(">> add_custom_command: ${PYTHON_EXECUTABLE} precompile_bitcode.py ${CUDA_OPTION} --hipSdkPath \"${HIP_FINAL_PATH}\"")
-		add_custom_command(
-			OUTPUT ${KERNEL_UNITTEST_COMP}
-			COMMAND ${PYTHON_EXECUTABLE} precompile_bitcode.py ${CUDA_OPTION} --hipSdkPath ${HIP_FINAL_PATH}
-			DEPENDS ${KERNEL_HIPRT_COMP}  # Ensure compile.py has already run.
-			WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/scripts/bitcodes
-			COMMENT "Precompiling unit tests kernels via precompile_bitcode.py"
-			VERBATIM
-			DEPENDS ${unittest_kernel_source}
-			)
-			
-		# create the 'precompile_unittest_kernels' project
-		add_custom_target(precompile_unittest_kernels ALL
-			DEPENDS ${KERNEL_UNITTEST_COMP}
-			)
-			
-		add_dependencies(${HIPRT_NAME} precompile_unittest_kernels)
-	endif()
-	
-
+    set_target_properties(${HIPRT_LIB_NAME} PROPERTIES OUTPUT_NAME "${HIPRT_LIB_NAME}64")
 endif()
 
+# Compile definitions
+target_compile_definitions(${HIPRT_LIB_NAME} PRIVATE HIPRT_EXPORTS)
 
-
-# convert the binary to a buffer that will be embeded inside the binary
-# it's expected the step 'PRECOMPILE' has been executed.
-if ( BAKE_COMPILED_KERNEL )
-	
-	message(">> precompiled will be embedded.")
-	
-	set(PYTHON_FILE "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/scripts/convert_binary_to_array.py")
-
-	set(ARCHIVE_SCRIPT  "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/scripts/create_archive.cmake")
-	
-	# HIPRT binary
-	set(KERNEL_HIPRT_H "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/impl/bvh_build_array.h")
-	add_custom_command(
-		OUTPUT ${KERNEL_HIPRT_H}
-		# 1) Create the Zstd archive
-		COMMAND	${CMAKE_COMMAND}  -DINPUT_FILE=${KERNEL_HIPRT_COMP} -DOUTPUT_FILE=${KERNEL_HIPRT_COMP_COMPRESSED} -DDO_COMPRESS=${COMPILED_COMPRESSION}  -P ${ARCHIVE_SCRIPT}
-		# 2) Run the Python converter on that archive
-		COMMAND ${PYTHON_EXECUTABLE} ${PYTHON_FILE} ${KERNEL_HIPRT_COMP} ${KERNEL_HIPRT_COMP_COMPRESSED} ${KERNEL_HIPRT_H} ${COMPILED_COMPRESSION}
-		DEPENDS ${KERNEL_HIPRT_COMP}  # Ensure compile.py has already run.
-		WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-		COMMENT "Converting HIPRT compiled kernel to header"
-		VERBATIM
-	)
-
-	# Orochi binary
-	set(KERNEL_OROCHI_H "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/cache/oro_compiled_kernels.h")
-	add_custom_command(
-		OUTPUT ${KERNEL_OROCHI_H}
-		# 1) Create the Zstd archive
-		COMMAND	${CMAKE_COMMAND}  -DINPUT_FILE=${KERNEL_OROCHI_COMP} -DOUTPUT_FILE=${KERNEL_OROCHI_COMP_COMPRESSED} -DDO_COMPRESS=${COMPILED_COMPRESSION}  -P ${ARCHIVE_SCRIPT}
-		# 2) Run the Python converter on that archive
-		COMMAND ${PYTHON_EXECUTABLE} ${PYTHON_FILE} ${KERNEL_OROCHI_COMP} ${KERNEL_OROCHI_COMP_COMPRESSED} ${KERNEL_OROCHI_H} ${COMPILED_COMPRESSION}
-		DEPENDS ${KERNEL_OROCHI_COMP}  # Ensure compile.py has already run.
-		WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-		COMMENT "Converting Orochi compiled kernel to header"
-		VERBATIM
-	)
-
-	# Create the 'bake_compiled_kernels' project
-	add_custom_target(bake_compiled_kernels ALL
-		DEPENDS ${KERNEL_HIPRT_H} ${KERNEL_OROCHI_H} precompile_kernels
-	)
-
-	add_dependencies(${HIPRT_NAME} precompile_kernels bake_compiled_kernels)
-
+if(HIPRT_BITCODE)
+    target_compile_definitions(${HIPRT_LIB_NAME} PRIVATE HIPRT_BITCODE_LINKING ORO_PRECOMPILED)
 endif()
 
-
-
-if(BAKE_KERNEL OR GENERATE_BAKE_KERNEL)
-	message(">> BakeKernel Executed")
-	if(WIN32)
-		execute_process(
-			COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/bakeKernel.bat
-			WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-			)
-	else()
-		execute_process(
-			COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/bakeKernel.sh
-			WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-			)
-	endif()
-
-	target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_BAKE_KERNEL_GENERATED)
-
+if(HIPRT_BAKE_KERNEL)
+    target_compile_definitions(${HIPRT_LIB_NAME} PRIVATE 
+        HIPRT_LOAD_FROM_STRING 
+        ORO_PP_LOAD_FROM_STRING
+        HIPRT_BAKE_KERNEL_GENERATED
+    )
 endif()
 
-
-
-if ( BAKE_COMPILED_KERNEL )
-
-
-	if ( COMPILED_COMPRESSION )
-		#  Gather minimal Zstd sources
-		file(GLOB ZSTD_SRCS
-			contrib/zstd/lib/common/*.c
-			contrib/zstd/lib/decompress/*.c
-			)
-
-		#  Build a static lib zstd_embedded
-		add_library(zstd_embedded STATIC
-			${ZSTD_SRCS}
-		)
-
-		#  Include Zstd headers
-		target_include_directories(zstd_embedded
-			PUBLIC
-			contrib/zstd/lib
-		)
-		
-		set_target_properties(zstd_embedded PROPERTIES POSITION_INDEPENDENT_CODE ON)  # -fPIC
-		target_compile_definitions(zstd_embedded PRIVATE ZSTD_DISABLE_ASM)  # disable ASM for easier build
-
-		#  Link against zstd_embedded
-		target_link_libraries(${HIPRT_NAME}   zstd_embedded )
-		
-		# the 'ORO_LINK_ZSTD' flag enables use of ZSTD API in the source code.
-		target_compile_definitions(${HIPRT_NAME} PRIVATE ORO_LINK_ZSTD)
-	endif()
-
-
-
-	# enable the 'BAKE_COMPILED_KERNEL' on Orochi:  this mode is activated by adding those 2 defines.
-	target_compile_definitions(${HIPRT_NAME} PRIVATE ORO_PP_LOAD_FROM_STRING HIPRT_BITCODE_LINKING ORO_PRECOMPILED)
-	
-	#enable the 'BAKE_COMPILED_KERNEL' on HIPRT: 
-	target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_BAKE_COMPILED_KERNEL )
+if(HIPRT_BAKE_COMPILED_KERNEL)
+    target_compile_definitions(${HIPRT_LIB_NAME} PRIVATE 
+        ORO_PP_LOAD_FROM_STRING 
+        HIPRT_BITCODE_LINKING 
+        ORO_PRECOMPILED
+        HIPRT_BAKE_COMPILED_KERNEL
+    )
 endif()
 
+# Include directories
+target_include_directories(${HIPRT_LIB_NAME} 
+    PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi
+)
 
-if(BAKE_KERNEL)
-	target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_LOAD_FROM_STRING ORO_PP_LOAD_FROM_STRING)
-endif()
-
-
-
-if(WIN32)
-	target_link_libraries(${HIPRT_NAME} version)
-endif()
-
-
-target_include_directories(${HIPRT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(${HIPRT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi)
-
-file(GLOB_RECURSE hiprt_sources "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/*.inl")
+# Source files
+file(GLOB_RECURSE hiprt_sources 
+    "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/*.h" 
+    "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/*.cpp"
+)
 list(FILTER hiprt_sources EXCLUDE REGEX "hiprt/bitcodes/.*")
-file(GLOB_RECURSE orochi_sources "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/Orochi/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/Orochi/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/cuew/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/cuew/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/hipew/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/hipew/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/*.cpp")
-target_sources(${HIPRT_NAME} PRIVATE ${hiprt_sources} ${orochi_sources})
 
+file(GLOB_RECURSE orochi_sources 
+    "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/Orochi/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/Orochi/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/cuew/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/cuew/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/hipew/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/hipew/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/*.cpp"
+)
 
+target_sources(${HIPRT_LIB_NAME} PRIVATE ${hiprt_sources} ${orochi_sources})
 
-
-#
-# install script
-#
-
-install(TARGETS ${HIPRT_NAME} DESTINATION bin)
-
-# add header files
-file(GLOB HIPRT_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/*.h")
-install(FILES ${HIPRT_HEADERS}
-		DESTINATION include/hiprt)
-
-# Add header files from implementation folder.
-# Ignore header which is generated by the baking tool and is only needed by the build process.
-file(GLOB HIPRT_IMPL_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/impl/*.h")
-list(REMOVE_ITEM HIPRT_IMPL_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/hiprt/impl/bvh_build_array.h")
-install(FILES ${HIPRT_IMPL_HEADERS}
-		DESTINATION include/hiprt/impl)
-		
-# add some header files from Orochi
-file(GLOB HIPRT_ORO_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/*.h")
-install(FILES ${HIPRT_ORO_HEADERS}
-		DESTINATION include/contrib/Orochi/ParallelPrimitives)
-
-# add hipfb files
-if(PRECOMPILE AND NOT BAKE_COMPILED_KERNEL)
-	install(FILES ${KERNEL_HIPRT_COMP} ${KERNEL_OROCHI_COMP}
-			DESTINATION bin)
+# Platform-specific linking
+if(WIN32)
+    target_link_libraries(${HIPRT_LIB_NAME} PRIVATE version)
 endif()
 
-
-
-
-
-
-# Project: Unit Test
-if(NOT NO_UNITTEST)
-
-	add_executable(unittest)
-
-	if(BITCODE OR BAKE_COMPILED_KERNEL)
-		target_compile_definitions(unittest PRIVATE HIPRT_BITCODE_LINKING)
-	endif()
-	if(WIN32)
-		target_compile_options(unittest PRIVATE /wd4244)
-		target_link_libraries(unittest PRIVATE version)
-	endif()
-
-	if( ${CMAKE_BUILD_TYPE} STREQUAL "Debug" )
-		set_target_properties(unittest PROPERTIES OUTPUT_NAME "unittest64D")
-	else()
-		set_target_properties(unittest PROPERTIES OUTPUT_NAME "unittest64")
-	endif()
-
-
-	target_include_directories(unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi)
-	target_link_libraries(unittest PRIVATE ${HIPRT_NAME})
-
-	if(UNIX)
-		target_link_libraries(unittest PRIVATE pthread dl)
-	endif()
-
-	file(GLOB_RECURSE unittest_sources "${CMAKE_CURRENT_SOURCE_DIR}/test/hiprtT*.h" "${CMAKE_CURRENT_SOURCE_DIR}/test/hiprtT*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/test/shared.h" "${CMAKE_CURRENT_SOURCE_DIR}/test/main.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/test/CornellBox.h" "${CMAKE_CURRENT_SOURCE_DIR}/test/kernels/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/contrib/gtest-1.6.0/gtest-all.cc")
-
-
-	target_sources(unittest PRIVATE ${unittest_sources} ${orochi_sources})
-
-	target_include_directories(unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/contrib/gtest-1.6.0 ${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/include)
-
-
-	if(WIN32)
-
-		# Use target_link_directories to specify additional library directories
-		target_link_directories(unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/win)
-		target_link_directories(unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/contrib/bin/win64)
-
-		copy_dir(${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/win ${CMAKE_CURRENT_SOURCE_DIR}/dist/bin/Release "*.dll")
-		copy_dir(${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/win ${CMAKE_CURRENT_SOURCE_DIR}/dist/bin/Debug "*.dll")
-		copy_dir(${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/bin/win64 ${CMAKE_CURRENT_SOURCE_DIR}/dist/bin/Release "*.dll")
-		copy_dir(${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/contrib/bin/win64 ${CMAKE_CURRENT_SOURCE_DIR}/dist/bin/Debug "*.dll")
-
-		# Explicitly link libraries from contrib/embree/win and contrib/bin/win64
-		target_link_libraries(unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/win/embree4.lib)
-
-	endif()
-
-
-	if(UNIX)
-		target_link_directories(unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/linux)
-	endif()
-
-	target_link_libraries(unittest PRIVATE embree4 tbb)
-
+# Zstd for compression
+if(HIPRT_BAKE_COMPILED_KERNEL AND HIPRT_COMPILED_COMPRESSION)
+    file(GLOB ZSTD_SRCS
+        contrib/zstd/lib/common/*.c
+        contrib/zstd/lib/decompress/*.c
+    )
+    
+    add_library(zstd_embedded STATIC ${ZSTD_SRCS})
+    target_include_directories(zstd_embedded PUBLIC contrib/zstd/lib)
+    set_target_properties(zstd_embedded PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(zstd_embedded PRIVATE ZSTD_DISABLE_ASM)
+    
+    target_link_libraries(${HIPRT_LIB_NAME} PRIVATE zstd_embedded)
+    target_compile_definitions(${HIPRT_LIB_NAME} PRIVATE ORO_LINK_ZSTD)
 endif()
 
-
-# Project: HIPRTEW Test
-if(HIPRTEW)
-	add_executable(hiprtewtest)
-
-	target_compile_definitions(hiprtewtest PRIVATE HIPRT_EXPORTS USE_HIPRTEW)
-	if(WIN32)
-		target_compile_options(hiprtewtest PRIVATE /wd4244)
-		target_link_libraries(hiprtewtest PRIVATE version)
-	endif()
-
-	target_include_directories(hiprtewtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi)
-	if(UNIX)
-		target_link_libraries(hiprtewtest PRIVATE pthread dl)
-	endif()
-
-	file(GLOB_RECURSE hiprtewtest_sources "${CMAKE_CURRENT_SOURCE_DIR}/test/hiprtewTest.h" "${CMAKE_CURRENT_SOURCE_DIR}/test/hiprtewTest.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/contrib/gtest-1.6.0/gtest-all.cc")
-	target_sources(hiprtewtest PRIVATE ${hiprtewtest_sources} ${orochi_sources})
-
-	target_include_directories(hiprtewtest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/contrib/gtest-1.6.0)
-
-	target_compile_definitions(hiprtewtest PRIVATE GTEST_HAS_TR1_TUPLE=0)
+# Dependencies on kernel generation
+if(GENERATE_BAKED_KERNEL)
+    add_dependencies(${HIPRT_LIB_NAME} bake_kernels)
 endif()
+
+if(HIPRT_BAKE_COMPILED_KERNEL)
+    add_dependencies(${HIPRT_LIB_NAME} bake_compiled_kernels)
+endif()
+
+if(HIPRT_PRECOMPILE AND HIPRT_BUILD_UNITTEST)
+    add_dependencies(${HIPRT_LIB_NAME} precompile_unittest_kernels)
+endif()
+
+# ==============================================================================
+# Unit Test Target
+# ==============================================================================
+
+if(HIPRT_BUILD_UNITTEST)
+    add_executable(unittest)
+    
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set_target_properties(unittest PROPERTIES OUTPUT_NAME "unittest64D")
+    else()
+        set_target_properties(unittest PROPERTIES OUTPUT_NAME "unittest64")
+    endif()
+    
+    if(HIPRT_BITCODE OR HIPRT_BAKE_COMPILED_KERNEL)
+        target_compile_definitions(unittest PRIVATE HIPRT_BITCODE_LINKING)
+    endif()
+    
+    if(WIN32)
+        target_compile_options(unittest PRIVATE /wd4244)
+        target_link_libraries(unittest PRIVATE version)
+    endif()
+    
+    target_include_directories(unittest PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi
+        ${CMAKE_CURRENT_SOURCE_DIR}/contrib/gtest-1.6.0
+        ${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/include
+    )
+    
+    file(GLOB_RECURSE unittest_sources 
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/hiprtT*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/hiprtT*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/shared.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/main.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/CornellBox.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/kernels/*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/contrib/gtest-1.6.0/gtest-all.cc"
+    )
+    
+    target_sources(unittest PRIVATE ${unittest_sources} ${orochi_sources})
+    target_link_libraries(unittest PRIVATE ${HIPRT_LIB_NAME})
+    
+    if(UNIX)
+        target_link_libraries(unittest PRIVATE pthread dl)
+    endif()
+    
+    if(WIN32)
+        target_link_directories(unittest PRIVATE 
+            ${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/win
+        )
+        target_link_libraries(unittest PRIVATE 
+            ${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/win/embree4.lib
+        )
+    else()
+        target_link_directories(unittest PRIVATE 
+            ${CMAKE_CURRENT_SOURCE_DIR}/contrib/embree/linux
+        )
+    endif()
+    
+    target_link_libraries(unittest PRIVATE embree4 tbb)
+endif()
+
+# ==============================================================================
+# HIPRTEW Test Target
+# ==============================================================================
+
+if(HIPRT_BUILD_HIPRTEW)
+    add_executable(hiprtewtest)
+    
+    target_compile_definitions(hiprtewtest PRIVATE HIPRT_EXPORTS USE_HIPRTEW)
+    
+    if(WIN32)
+        target_compile_options(hiprtewtest PRIVATE /wd4244)
+        target_link_libraries(hiprtewtest PRIVATE version)
+    endif()
+    
+    target_include_directories(hiprtewtest PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi
+        ${CMAKE_CURRENT_SOURCE_DIR}/contrib/gtest-1.6.0
+    )
+    
+    if(UNIX)
+        target_link_libraries(hiprtewtest PRIVATE pthread dl)
+    endif()
+    
+    file(GLOB_RECURSE hiprtewtest_sources 
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/hiprtewTest.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/hiprtewTest.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/contrib/gtest-1.6.0/gtest-all.cc"
+    )
+    
+    target_sources(hiprtewtest PRIVATE ${hiprtewtest_sources} ${orochi_sources})
+endif()
+
+# ==============================================================================
+# Installation Rules
+# ==============================================================================
+
+include(GNUInstallDirs)
+
+# Install library
+install(TARGETS ${HIPRT_LIB_NAME}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+# Install headers
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/hiprt/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/hiprt
+    FILES_MATCHING PATTERN "*.h"
+    PATTERN "cache" EXCLUDE
+    PATTERN "bitcodes" EXCLUDE
+    PATTERN "*.in" EXCLUDE
+    PATTERN "impl/bvh_build_array.h" EXCLUDE
+)
+
+# Install Orochi headers
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/ParallelPrimitives/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/contrib/Orochi/ParallelPrimitives
+    FILES_MATCHING PATTERN "*.h"
+    PATTERN "cache" EXCLUDE
+)
+
+# Install precompiled kernels
+if(HIPRT_PRECOMPILE AND NOT HIPRT_BAKE_COMPILED_KERNEL)
+    install(FILES 
+        "${KERNEL_HIPRT_COMP}"
+        "${KERNEL_OROCHI_COMP}"
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
+
+# ==============================================================================
+# Package Configuration
+# ==============================================================================
+
+include(CMakePackageConfigHelpers)
+
+# Generate package config file
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/HIPRTConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/HIPRTConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/HIPRT
+)
+
+# Generate version file
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/HIPRTConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+# Install package config files
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/HIPRTConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/HIPRTConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/HIPRT
+)
