@@ -32,6 +32,11 @@ template <typename ApiFrame>
 class InstanceList
 {
   public:
+	// Type alias for the stored frame type:
+	// - SRTFrame: converts to Frame and stores Frame (for compatibility)
+	// - MatrixFrame: stores MatrixFrame directly (no conversion)
+	using StoredFrame = typename std::conditional<std::is_same<ApiFrame, SRTFrame>::value, Frame, MatrixFrame>::type;
+
 	HIPRT_HOST_DEVICE InstanceList( const hiprtSceneBuildInput& input )
 		: m_instanceCount( input.instanceCount ), m_frameCount( input.frameCount )
 	{
@@ -46,7 +51,7 @@ class InstanceList
 	{
 		const hiprtInstance		   instance	 = fetchInstance( index );
 		const hiprtTransformHeader transform = fetchTransformHeader( index );
-		const Frame				   frame	 = fetchFrame( transform.frameIndex );
+		const StoredFrame		   frame	 = fetchFrame( transform.frameIndex );
 		const uint32_t			   mask		 = fetchMask( index );
 
 		InstanceNode instanceNode{};
@@ -261,18 +266,26 @@ class InstanceList
 		return m_transformHeaders[index];
 	}
 
-	HIPRT_DEVICE Frame fetchFrame( const uint32_t index ) const
+	HIPRT_DEVICE StoredFrame fetchFrame( const uint32_t index ) const
 	{
-		if ( m_frameCount == 0 || m_apiFrames == nullptr || m_frames == nullptr ) return Frame();
+		if ( m_frameCount == 0 || m_apiFrames == nullptr || m_frames == nullptr ) return StoredFrame();
 		if constexpr ( is_same<ApiFrame, SRTFrame>::value )
 		{
+			// if (index < m_frameCount)
+			// {
+			// 	printf("fetchFrame: Fetching Frame index=%u, frameCount=%u, storage = Frame\n", index, m_frameCount);
+			// }
 			// For SRTFrame, m_frames contains converted Frame data
 			return static_cast<Frame*>( m_frames )[index];
 		}
 		else
 		{
-			// For MatrixFrame, convert on the fly
-			return static_cast<ApiFrame*>( m_frames )[index].convert();
+			// if (index < m_frameCount)
+			// {
+			// 	printf("fetchFrame: Fetching Frame index=%u, frameCount=%u, storage = MatrixFrame\n", index, m_frameCount);
+			// }
+			// For MatrixFrame, return MatrixFrame directly (no conversion to Frame)
+			return static_cast<MatrixFrame*>( m_frames )[index];
 		}
 	}
 
@@ -283,12 +296,16 @@ class InstanceList
 			if constexpr ( is_same<ApiFrame, SRTFrame>::value )
 			{
 				// Convert SRTFrame to Frame
-				static_cast<Frame*>( m_frames )[index] = m_apiFrames[index].convert();
+				//if ( index == 0 )
+					// printf("convertFrame: Converting SRTFrame to Frame, frameCount=%u\n", m_frameCount);
+				static_cast<StoredFrame*>( m_frames )[index] = m_apiFrames[index].convert();
 			}
 			else
 			{
 				// Direct copy for MatrixFrame (no conversion)
-				static_cast<ApiFrame*>( m_frames )[index] = m_apiFrames[index];
+				//if ( index == 0 )
+				//	printf("convertFrame: Direct copy MatrixFrame, frameCount=%u\n", m_frameCount);
+				static_cast<StoredFrame*>( m_frames )[index] = m_apiFrames[index];
 			}
 		}
 	}
@@ -304,17 +321,10 @@ class InstanceList
 
 	HIPRT_HOST_DEVICE bool copyInvTransformMatrix( const uint32_t index, float ( &matrix )[3][4] ) const
 	{
-		const Frame frame = fetchFrame( index );
-		if constexpr ( is_same<ApiFrame, MatrixFrame>::value )
-		{
-			// For MatrixFrame Direct path, frame is already Frame (converted from MatrixFrame)
-			return hiprt::copyInvTransformMatrix( frame, matrix );
-		}
-		else
-		{
-			// For SRTFrame, frame is already Frame (converted from SRTFrame)
-			return hiprt::copyInvTransformMatrix( frame, matrix );
-		}
+		const StoredFrame frame = fetchFrame( index );
+		// StoredFrame is either Frame (for SRTFrame) or MatrixFrame (for MatrixFrame)
+		// Both have overloaded copyInvTransformMatrix functions
+		return hiprt::copyInvTransformMatrix( frame, matrix );
 	}
 
 	HIPRT_HOST_DEVICE uint32_t getCount() const { return m_instanceCount; }
@@ -324,6 +334,8 @@ class InstanceList
 	HIPRT_HOST_DEVICE void setFrames( void* frames ) { m_frames = frames; }
 
 	HIPRT_HOST_DEVICE ApiFrame* getApiFrames() const { return m_apiFrames; }
+	
+	HIPRT_HOST_DEVICE void* getFrames() const { return m_frames; }
 
   private:
 	hiprtInstance*		  m_instances;

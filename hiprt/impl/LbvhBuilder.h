@@ -197,7 +197,10 @@ void LbvhBuilder::build(
 		if constexpr ( std::is_same<PrimitiveContainer, InstanceList<MatrixFrame>>::value )
 		{
 			// Direct MatrixFrame storage path
+			//context.logInfo( "LbvhBuilder: Using Direct MatrixFrame storage path, frameCount: ", primitives.getFrameCount(), "\n" );
 			MatrixFrame* frames = storageMemoryArena.allocate<MatrixFrame>( primitives.getFrameCount() );
+			// std::cout << "DEBUG: Allocated frames buffer at address: " << reinterpret_cast<void*>(frames) 
+			// 		  << ", size=" << (primitives.getFrameCount() * sizeof(MatrixFrame)) << " bytes" << std::endl;
 			primitives.setFrames( frames );
 			
 			Kernel initDataKernel = compiler.getKernel(
@@ -213,6 +216,7 @@ void LbvhBuilder::build(
 		else
 		{
 			// Legacy Frame conversion path
+			//context.logInfo( "LbvhBuilder: Using Legacy Frame conversion path, frameCount: ", primitives.getFrameCount(), "\n" );
 			Frame* frames = storageMemoryArena.allocate<Frame>( primitives.getFrameCount() );
 			primitives.setFrames( frames );
 			
@@ -288,6 +292,15 @@ void LbvhBuilder::build(
 	Aabb emptyBox;
 	checkOro( oroMemcpyHtoDAsync( reinterpret_cast<oroDeviceptr>( centroidBox ), &emptyBox, sizeof( Aabb ), stream ) );
 
+	// std::cout << "DEBUG: Before ComputeCentroidBox - primitives.getCount()=" << primitives.getCount() 
+	// 		  << ", centroidBox=" << reinterpret_cast<void*>( centroidBox );
+	// if constexpr ( std::is_same<PrimitiveContainer, InstanceList<MatrixFrame>>::value || 
+	// 			   std::is_same<PrimitiveContainer, InstanceList<SRTFrame>>::value )
+	// {
+	// 	std::cout << ", primitives.getFrames()=" << primitives.getFrames();
+	// }
+	// std::cout << std::endl;
+
 	Kernel computeCentroidBoxKernel = compiler.getKernel(
 		context,
 		Utility::getRootDir() / "hiprt/impl/BvhBuilderKernels.h",
@@ -298,6 +311,8 @@ void LbvhBuilder::build(
 	timer.measure( ComputeCentroidBoxTime, [&]() {
 		computeCentroidBoxKernel.launch( primitives.getCount(), ReductionBlockSize, stream );
 	} );
+	checkOro( oroStreamSynchronize( stream ) );
+	//std::cout << "DEBUG: After ComputeCentroidBox - succeeded" << std::endl;
 
 	// STEP 3: Calculate Morton codes
 	Kernel computeMortonCodesKernel = compiler.getKernel(
@@ -327,7 +342,20 @@ void LbvhBuilder::build(
 	emitTopologyAndFitBoundsKernel.setArgs(
 		{ mortonCodeKeys[1], mortonCodeValues[1], updateCounters, primitives, scratchNodes, references } );
 	timer.measure( EmitTopologyTime, [&]() { emitTopologyAndFitBoundsKernel.launch( primitives.getCount(), stream ); } );
-
+	checkOro( oroStreamSynchronize( stream ) );
+	
+	// Debug: Print updateCounters to verify memory validity
+	// std::vector<uint32_t> updateCountersHost( primitives.getCount() );
+	// checkOro( oroMemcpyDtoHAsync(
+	// 	updateCountersHost.data(), reinterpret_cast<oroDeviceptr>( updateCounters ), sizeof( uint32_t ) * primitives.getCount(), stream ) );
+	// checkOro( oroStreamSynchronize( stream ) );
+	// std::cout << "DEBUG updateCounters (count=" << primitives.getCount() << "): ";
+	// for ( uint32_t i = 0; i < std::min( primitives.getCount(), 20u ); ++i )
+	// 	std::cout << updateCountersHost[i] << " ";
+	// if ( primitives.getCount() > 20 )
+	// 	std::cout << "... " << updateCountersHost[primitives.getCount() - 1];
+	// std::cout << std::endl;
+	
 	uint32_t rootAddr;
 	checkOro( oroMemcpyDtoHAsync(
 		&rootAddr, reinterpret_cast<oroDeviceptr>( &updateCounters[primitives.getCount() - 1] ), sizeof( uint32_t ), stream ) );

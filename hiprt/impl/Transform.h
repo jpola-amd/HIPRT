@@ -110,6 +110,13 @@ struct alignas( 16 ) SRTFrame
 	float3 m_translation;
 	float  m_time;
 
+	HIPRT_HOST_DEVICE SRTFrame() : m_time( 0.0f )
+	{
+		m_rotation	  = make_float4( 0.0f );
+		m_scale		  = make_float3( 1.0f );
+		m_translation = make_float3( 0.0f );
+	}
+
 	HIPRT_HOST_DEVICE Frame convert() const
 	{
 		Frame frame;
@@ -148,6 +155,14 @@ struct alignas( 64 ) MatrixFrame
 {
 	float m_matrix[3][4];
 	float m_time;
+
+	HIPRT_HOST_DEVICE MatrixFrame() : m_time( 0.0f )
+	{
+		// Initialize as identity matrix
+		m_matrix[0][0] = 1.0f; m_matrix[0][1] = 0.0f; m_matrix[0][2] = 0.0f; m_matrix[0][3] = 0.0f;
+		m_matrix[1][0] = 0.0f; m_matrix[1][1] = 1.0f; m_matrix[1][2] = 0.0f; m_matrix[1][3] = 0.0f;
+		m_matrix[2][0] = 0.0f; m_matrix[2][1] = 0.0f; m_matrix[2][2] = 1.0f; m_matrix[2][3] = 0.0f;
+	}
 
 	HIPRT_HOST_DEVICE float3 transform( const float3& p ) const
 	{
@@ -337,6 +352,13 @@ struct alignas( 64 ) MatrixFrame
 		MatrixFrame matrixFrame{};
 		matrixFrame.m_time = frame.m_time;
 
+// #if defined( __KERNELCC__ ) && !defined( NDEBUG )
+// 		printf( "getMatrixFrameInv(Frame): scale=(%.2f,%.2f,%.2f) trans=(%.2f,%.2f,%.2f) rot=(%.2f,%.2f,%.2f,%.2f)\n",
+// 				frame.m_scale.x, frame.m_scale.y, frame.m_scale.z,
+// 				frame.m_translation.x, frame.m_translation.y, frame.m_translation.z,
+// 				frame.m_rotation.x, frame.m_rotation.y, frame.m_rotation.z, frame.m_rotation.w );
+// #endif
+
 		if ( frame.identity() )
 		{
 			matrixFrame.m_matrix[0][0] = 1.0f;
@@ -359,6 +381,11 @@ struct alignas( 64 ) MatrixFrame
 		Ri[1][0] = 0.0f;
 		Ri[2][0] = 0.0f;
 		Ri[2][1] = 0.0f;
+
+		// Zero out the 3x3 rotation/scale part before accumulation
+		for ( uint32_t i = 0; i < 3; ++i )
+			for ( uint32_t j = 0; j < 3; ++j )
+				matrixFrame.m_matrix[i][j] = 0.0f;
 
 #ifdef __KERNECC__
 #pragma unroll

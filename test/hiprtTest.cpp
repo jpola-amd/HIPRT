@@ -1025,11 +1025,12 @@ void hiprtTest::launchKernel(
 	checkOro( oroModuleLaunchKernel( func, nbx, nby, 1, tx, ty, 1, sharedMemoryBytes, 0, args, 0 ) );
 }
 
+template <typename FrameType>
 void ObjTestCases::createScene(
 	SceneData&					 scene,
 	const std::filesystem::path& filename,
 	bool						 enableRayMask,
-	std::optional<hiprtFrameSRT> frame,
+	std::optional<FrameType>	 frame,
 	hiprtBuildFlags				 bvhBuildFlag,
 	bool						 time )
 {
@@ -1419,6 +1420,17 @@ void ObjTestCases::createScene(
 	hiprtSceneBuildInput sceneInput{};
 	{
 		sceneInput.instanceCount = static_cast<uint32_t>( shapes.size() );
+		
+		// Set frame type based on template parameter
+		if constexpr ( std::is_same_v<FrameType, hiprtFrameMatrix> )
+		{
+			sceneInput.frameType = hiprtFrameTypeMatrix;
+		}
+		else
+		{
+			sceneInput.frameType = hiprtFrameTypeSRT;
+		}
+		
 		malloc( reinterpret_cast<uint32_t*&>( sceneInput.instanceMasks ), sceneInput.instanceCount );
 		copyHtoD( reinterpret_cast<uint32_t*>( sceneInput.instanceMasks ), instanceMask.data(), sceneInput.instanceCount );
 		scene.m_garbageCollector.push_back( sceneInput.instanceMasks );
@@ -1428,7 +1440,7 @@ void ObjTestCases::createScene(
 			reinterpret_cast<hiprtInstance*>( sceneInput.instances ), m_scene.m_instances.data(), sceneInput.instanceCount );
 		scene.m_garbageCollector.push_back( sceneInput.instances );
 
-		std::vector<hiprtFrameSRT> frames;
+		std::vector<FrameType> frames;
 		if ( frame )
 		{
 			sceneInput.frameCount				= sceneInput.instanceCount;
@@ -1437,16 +1449,45 @@ void ObjTestCases::createScene(
 			for ( uint32_t i = 0; i < sceneInput.instanceCount; i++ )
 				frames.push_back( frame.value() );
 
-			malloc( reinterpret_cast<hiprtFrameSRT*&>( sceneInput.instanceFrames ), frames.size() );
-			copyHtoD( reinterpret_cast<hiprtFrameSRT*>( sceneInput.instanceFrames ), frames.data(), frames.size() );
+			malloc( reinterpret_cast<FrameType*&>( sceneInput.instanceFrames ), frames.size() );
+			copyHtoD( reinterpret_cast<FrameType*>( sceneInput.instanceFrames ), frames.data(), frames.size() );
+			scene.m_garbageCollector.push_back( sceneInput.instanceFrames );
+		}
+		else if constexpr ( std::is_same_v<FrameType, hiprtFrameMatrix> )
+		{
+			// For Matrix frames, we need to provide identity matrices even when no transform is specified
+			sceneInput.frameCount				= sceneInput.instanceCount;
+			sceneInput.instanceTransformHeaders = nullptr;
+
+			// Create identity matrix frames
+			FrameType identityFrame{};
+			identityFrame.matrix[0][0] = 1.0f;
+			identityFrame.matrix[1][1] = 1.0f;
+			identityFrame.matrix[2][2] = 1.0f;
+			identityFrame.time		   = 0.0f;
+
+			for ( uint32_t i = 0; i < sceneInput.instanceCount; i++ )
+				frames.push_back( identityFrame );
+
+			malloc( reinterpret_cast<FrameType*&>( sceneInput.instanceFrames ), frames.size() );
+			copyHtoD( reinterpret_cast<FrameType*>( sceneInput.instanceFrames ), frames.data(), frames.size() );
 			scene.m_garbageCollector.push_back( sceneInput.instanceFrames );
 		}
 
 		if ( ( bvhBuildFlag & 3 ) == hiprtBuildFlagBitCustomBvhImport )
 		{
-			buildEmbreeSceneBvh( embreeDevice, geomBoxes, frames, sceneInput );
-			scene.m_garbageCollector.push_back( sceneInput.nodeList.leafNodes );
-			scene.m_garbageCollector.push_back( sceneInput.nodeList.internalNodes );
+			// Embree BVH import only supported for SRT frames
+			if constexpr ( std::is_same_v<FrameType, hiprtFrameSRT> )
+			{
+				buildEmbreeSceneBvh( embreeDevice, geomBoxes, frames, sceneInput );
+				scene.m_garbageCollector.push_back( sceneInput.nodeList.leafNodes );
+				scene.m_garbageCollector.push_back( sceneInput.nodeList.internalNodes );
+			}
+			else
+			{
+				// For MatrixFrame, skip Embree import (not implemented)
+				std::cerr << "Warning: Embree BVH import not supported for MatrixFrame, skipping." << std::endl;
+			}
 		}
 
 		size_t			  sceneTempSize;
@@ -1458,6 +1499,11 @@ void ObjTestCases::createScene(
 			malloc( reinterpret_cast<uint8_t*&>( sceneTemp ), sceneTempSize );
 			scene.m_garbageCollector.push_back( sceneTemp );
 		}
+
+		// Store scene build data for potential motion blur updates
+		scene.m_sceneTemp	   = sceneTemp;
+		scene.m_instanceCount  = sceneInput.instanceCount;
+		scene.m_buildFlags	   = bvhBuildFlag;
 
 		checkHiprt( hiprtCreateScene( scene.m_ctx, sceneInput, options, sceneLocal ) );
 
@@ -1475,16 +1521,497 @@ void ObjTestCases::createScene(
 	if ( ( bvhBuildFlag & 3 ) == hiprtBuildFlagBitCustomBvhImport ) rtcReleaseDevice( embreeDevice );
 }
 
-void ObjTestCases::setupScene(
-	Camera&						 camera,
+template <typename FrameType>
+void ObjTestCases::createScene(
+	SceneData&					 scene,
 	const std::filesystem::path& filename,
 	bool						 enableRayMask,
-	std::optional<hiprtFrameSRT> frame,
+	const std::vector<FrameType>& frames,
 	hiprtBuildFlags				 bvhBuildFlag,
 	bool						 time )
 {
-	m_camera = camera;
-	createScene( m_scene, filename, enableRayMask, frame, bvhBuildFlag, time );
+	checkHiprt( hiprtCreateContext( HIPRT_API_VERSION, m_ctxtInput, scene.m_ctx ) );
+	checkHiprt( hiprtSetLogLevel( scene.m_ctx, hiprtLogLevelError | hiprtLogLevelWarn ) );
+
+	tinyobj::attrib_t				 attrib;
+	std::vector<tinyobj::shape_t>	 shapes;
+	std::vector<tinyobj::material_t> materials;
+	std::string						 err;
+	std::string						 warning;
+
+	bool ret = tinyobj::LoadObj(
+		&attrib, &shapes, &materials, &warning, &err, filename.string().c_str(), filename.parent_path().string().c_str() );
+
+	if ( !warning.empty() )
+	{
+		std::cerr << "OBJ Loader WARN : " << warning << std::endl;
+	}
+
+	if ( !err.empty() )
+	{
+		std::cerr << "OBJ Loader ERROR : " << err << std::endl;
+		std::abort();
+	}
+
+	if ( !ret )
+	{
+		std::cerr << "Failed to load obj file" << std::endl;
+		std::abort();
+	}
+
+	if ( shapes.empty() )
+	{
+		std::cerr << "No shapes in obj file (run 'git lfs fetch' and 'git lfs pull' in 'test/common/meshes/lfs')" << std::endl;
+		std::abort();
+	}
+
+	std::vector<Material> shapeMaterials; // materials for all instances
+	std::vector<Light>	  lights;
+	std::vector<uint32_t> materialIndices; // material ids for all instances
+	std::vector<uint32_t> instanceMask;
+	std::vector<float3>	  allVertices;
+	std::vector<float3>	  allNormals;
+	std::vector<uint32_t> allIndices;
+	std::vector<Aabb>	  geomBoxes;
+
+	uint32_t numOfLights = 0;
+
+	// Prefix sum to calculate the offsets in to global vert,index and material buffer
+	uint32_t				 vertexPrefixSum = 0u;
+	uint32_t				 normalPrefixSum = 0u;
+	uint32_t				 indexPrefixSum	 = 0u;
+	uint32_t				 matIdxPrefixSum = 0u;
+	std::vector<uint32_t>	 indicesOffsets;
+	std::vector<uint32_t>	 verticesOffsets;
+	std::vector<uint32_t>	 normalsOffsets;
+	std::vector<uint32_t>	 matIdxOffset;
+	std::chrono::nanoseconds bvhBuildTime{};
+
+	indicesOffsets.resize( shapes.size() );
+	verticesOffsets.resize( shapes.size() );
+	normalsOffsets.resize( shapes.size() );
+	matIdxOffset.resize( shapes.size() );
+
+	auto convert = []( const tinyobj::real_t c[3] ) -> float3 { return float3{ c[0], c[1], c[2] }; };
+
+	for ( const auto& mat : materials )
+	{
+		Material m;
+		m.m_diffuse	 = convert( mat.diffuse );
+		m.m_emission = convert( mat.emission );
+		shapeMaterials.push_back( m );
+	}
+
+	RTCDevice embreeDevice{};
+	if ( ( bvhBuildFlag & 3 ) == hiprtBuildFlagBitCustomBvhImport )
+	{
+		embreeDevice = rtcNewDevice( "" );
+		rtcSetDeviceErrorFunction(
+			embreeDevice,
+			[]( [[maybe_unused]] void* userPtr, [[maybe_unused]] enum RTCError code, const char* str ) {
+				std::cerr << str << std::endl;
+			},
+			nullptr );
+	}
+
+	auto compare = []( const tinyobj::index_t& a, const tinyobj::index_t& b ) {
+		if ( a.vertex_index < b.vertex_index ) return true;
+		if ( a.vertex_index > b.vertex_index ) return false;
+
+		if ( a.normal_index < b.normal_index ) return true;
+		if ( a.normal_index > b.normal_index ) return false;
+
+		if ( a.texcoord_index < b.texcoord_index ) return true;
+		if ( a.texcoord_index > b.texcoord_index ) return false;
+
+		return false;
+	};
+
+	for ( size_t i = 0; i < shapes.size(); ++i )
+	{
+		std::vector<float3>										  vertices;
+		std::vector<float3>										  normals;
+		std::vector<uint32_t>									  indices;
+		float3*													  v = reinterpret_cast<float3*>( attrib.vertices.data() );
+		std::map<tinyobj::index_t, uint32_t, decltype( compare )> knownIndex( compare );
+		Aabb													  geomBox;
+
+		for ( size_t face = 0; face < shapes[i].mesh.num_face_vertices.size(); face++ )
+		{
+			tinyobj::index_t idx0 = shapes[i].mesh.indices[3 * face + 0];
+			tinyobj::index_t idx1 = shapes[i].mesh.indices[3 * face + 1];
+			tinyobj::index_t idx2 = shapes[i].mesh.indices[3 * face + 2];
+
+			if ( knownIndex.find( idx0 ) != knownIndex.end() )
+			{
+				indices.push_back( knownIndex[idx0] );
+			}
+			else
+			{
+				knownIndex[idx0] = static_cast<uint32_t>( vertices.size() );
+				indices.push_back( knownIndex[idx0] );
+				vertices.push_back( v[idx0.vertex_index] );
+				normals.push_back( v[idx0.normal_index] );
+				geomBox.grow( vertices.back() );
+			}
+
+			if ( knownIndex.find( idx1 ) != knownIndex.end() )
+			{
+				indices.push_back( knownIndex[idx1] );
+			}
+			else
+			{
+				knownIndex[idx1] = static_cast<uint32_t>( vertices.size() );
+				indices.push_back( knownIndex[idx1] );
+				vertices.push_back( v[idx1.vertex_index] );
+				normals.push_back( v[idx1.normal_index] );
+				geomBox.grow( vertices.back() );
+			}
+
+			if ( knownIndex.find( idx2 ) != knownIndex.end() )
+			{
+				indices.push_back( knownIndex[idx2] );
+			}
+			else
+			{
+				knownIndex[idx2] = static_cast<uint32_t>( vertices.size() );
+				indices.push_back( knownIndex[idx2] );
+				vertices.push_back( v[idx2.vertex_index] );
+				normals.push_back( v[idx2.normal_index] );
+				geomBox.grow( vertices.back() );
+			}
+
+			if ( !shapeMaterials.empty() && shapeMaterials[shapes[i].mesh.material_ids[face]].light() )
+			{
+				Light l;
+				l.m_le = float3{
+					shapeMaterials[shapes[i].mesh.material_ids[face]].m_emission.x + 40.f,
+					shapeMaterials[shapes[i].mesh.material_ids[face]].m_emission.y + 40.f,
+					shapeMaterials[shapes[i].mesh.material_ids[face]].m_emission.z + 40.f };
+
+				size_t idx = indices.size() - 1;
+				l.m_lv0	   = vertices[indices[idx - 2]];
+				l.m_lv1	   = vertices[indices[idx - 1]];
+				l.m_lv2	   = vertices[indices[idx - 0]];
+
+				lights.push_back( l );
+				numOfLights++;
+			}
+
+			materialIndices.push_back(
+				shapes[i].mesh.material_ids[face] >= 0 ? shapes[i].mesh.material_ids[face] : hiprtInvalidValue );
+		}
+
+		verticesOffsets[i] = vertexPrefixSum;
+		vertexPrefixSum += static_cast<uint32_t>( vertices.size() );
+		indicesOffsets[i] = indexPrefixSum;
+		indexPrefixSum += static_cast<uint32_t>( indices.size() );
+		matIdxOffset[i] = matIdxPrefixSum;
+		matIdxPrefixSum += static_cast<uint32_t>( shapes[i].mesh.material_ids.size() );
+		normalsOffsets[i] = normalPrefixSum;
+		normalPrefixSum += static_cast<uint32_t>( normals.size() );
+
+		uint32_t mask = ~0u;
+		if ( enableRayMask && ( i % 2 == 0 ) ) mask = 0u;
+
+		instanceMask.push_back( mask );
+		geomBoxes.push_back( geomBox );
+
+		allVertices.insert( allVertices.end(), vertices.begin(), vertices.end() );
+		allNormals.insert( allNormals.end(), normals.begin(), normals.end() );
+		allIndices.insert( allIndices.end(), indices.begin(), indices.end() );
+	}
+
+	uint32_t threadCount = std::min( std::thread::hardware_concurrency(), 16u );
+	if ( ( bvhBuildFlag & 3 ) == hiprtBuildFlagBitCustomBvhImport ) threadCount = 1;
+	std::vector<std::thread>			  threads( threadCount );
+	std::vector<std::chrono::nanoseconds> bvhBuildTimes( threadCount );
+	std::vector<oroStream>				  streams( threadCount );
+	for ( size_t threadIndex = 0; threadIndex < threadCount; ++threadIndex )
+	{
+		checkOro( oroStreamCreate( &streams[threadIndex] ) );
+	}
+
+	oroCtx ctx;
+	checkOro( oroCtxGetCurrent( &ctx ) );
+
+	m_scene.m_geometries.resize( shapes.size() );
+	m_scene.m_instances.resize( shapes.size() );
+	for ( size_t threadIndex = 0; threadIndex < threadCount; ++threadIndex )
+	{
+		threads[threadIndex] = std::thread(
+			[&]( uint32_t threadIndex ) {
+				checkOro( oroCtxSetCurrent( ctx ) );
+
+				std::vector<hiprtGeometry*>			 geomAddrs;
+				std::vector<hiprtGeometryBuildInput> geomInputs;
+				for ( size_t i = threadIndex; i < shapes.size(); i += threadCount )
+				{
+					hiprtTriangleMeshPrimitive mesh;
+
+					uint32_t* indices	= &allIndices[indicesOffsets[i]];
+					mesh.triangleCount	= static_cast<uint32_t>( shapes[i].mesh.num_face_vertices.size() );
+					mesh.triangleStride = sizeof( uint32_t ) * 3;
+					malloc( reinterpret_cast<uint8_t*&>( mesh.triangleIndices ), 3 * mesh.triangleCount * sizeof( uint32_t ) );
+					copyHtoDAsync(
+						reinterpret_cast<uint32_t*>( mesh.triangleIndices ),
+						indices,
+						3 * mesh.triangleCount,
+						streams[threadIndex] );
+
+					float3* vertices  = &allVertices[verticesOffsets[i]];
+					mesh.vertexCount  = ( i + 1 == shapes.size() ) ? vertexPrefixSum - verticesOffsets[i]
+																   : verticesOffsets[i + 1] - verticesOffsets[i];
+					mesh.vertexStride = sizeof( float3 );
+					malloc( reinterpret_cast<uint8_t*&>( mesh.vertices ), mesh.vertexCount * sizeof( float3 ) );
+					copyHtoDAsync(
+						reinterpret_cast<float3*>( mesh.vertices ), vertices, mesh.vertexCount, streams[threadIndex] );
+
+					hiprtGeometryBuildInput geomInput;
+					geomInput.type					 = hiprtPrimitiveTypeTriangleMesh;
+					geomInput.primitive.triangleMesh = mesh;
+					geomInput.geomType				 = 0;
+
+					if ( ( bvhBuildFlag & 3 ) == hiprtBuildFlagBitCustomBvhImport )
+						buildEmbreeGeometryBvh( embreeDevice, vertices, indices, geomInput );
+
+					geomInputs.push_back( geomInput );
+					geomAddrs.push_back( &m_scene.m_geometries[i] );
+				}
+
+				if ( !geomInputs.empty() )
+				{
+					hiprtBuildOptions options;
+					options.buildFlags = bvhBuildFlag;
+
+					size_t geomTempSize;
+					checkHiprt( hiprtGetGeometriesBuildTemporaryBufferSize(
+						scene.m_ctx, static_cast<uint32_t>( geomInputs.size() ), geomInputs.data(), options, geomTempSize ) );
+
+					hiprtDevicePtr tempGeomBuffer = nullptr;
+					if ( geomTempSize > 0 ) malloc( reinterpret_cast<uint8_t*&>( tempGeomBuffer ), geomTempSize );
+
+					checkHiprt( hiprtCreateGeometries(
+						scene.m_ctx,
+						static_cast<uint32_t>( geomInputs.size() ),
+						geomInputs.data(),
+						options,
+						geomAddrs.data() ) );
+
+					std::vector<hiprtGeometry> geoms;
+					for ( size_t i = threadIndex; i < shapes.size(); i += threadCount )
+						geoms.push_back( m_scene.m_geometries[i] );
+
+					std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+					checkHiprt( hiprtBuildGeometries(
+						scene.m_ctx,
+						hiprtBuildOperationBuild,
+						static_cast<uint32_t>( geomInputs.size() ),
+						geomInputs.data(),
+						options,
+						tempGeomBuffer,
+						streams[threadIndex],
+						geoms.data() ) );
+					std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+					bvhBuildTimes[threadIndex] += end - begin;
+
+					size_t j = 0;
+					for ( size_t i = threadIndex; i < shapes.size(); i += threadCount )
+					{
+						m_scene.m_geometries[i]			= geoms[j++];
+						m_scene.m_instances[i].type		= hiprtInstanceTypeGeometry;
+						m_scene.m_instances[i].geometry = m_scene.m_geometries[i];
+					}
+
+					for ( auto& geomInput : geomInputs )
+					{
+						free( geomInput.primitive.triangleMesh.triangleIndices );
+						free( geomInput.primitive.triangleMesh.vertices );
+						if ( ( bvhBuildFlag & 3 ) == hiprtBuildFlagBitCustomBvhImport )
+						{
+							free( geomInput.nodeList.leafNodes );
+							free( geomInput.nodeList.internalNodes );
+							free( geomInput.primitive.triangleMesh.trianglePairIndices );
+						}
+					}
+
+					if ( geomTempSize > 0 ) free( tempGeomBuffer );
+
+					waitForCompletion( streams[threadIndex] );
+				}
+			},
+			threadIndex );
+	}
+
+	for ( size_t threadIndex = 0; threadIndex < threadCount; ++threadIndex )
+	{
+		threads[threadIndex].join();
+		checkOro( oroStreamDestroy( streams[threadIndex] ) );
+		bvhBuildTime = std::max( bvhBuildTime, bvhBuildTimes[threadIndex] );
+	}
+
+	// copy vertex offset
+	malloc( scene.m_vertexOffsets, verticesOffsets.size() );
+	copyHtoD( scene.m_vertexOffsets, verticesOffsets.data(), verticesOffsets.size() );
+	scene.m_garbageCollector.push_back( scene.m_vertexOffsets );
+
+	// copy normals
+	malloc( scene.m_normals, allNormals.size() );
+	copyHtoD( scene.m_normals, allNormals.data(), allNormals.size() );
+	scene.m_garbageCollector.push_back( scene.m_normals );
+
+	// copy normal offsets
+	malloc( scene.m_normalOffsets, normalsOffsets.size() );
+	copyHtoD( scene.m_normalOffsets, normalsOffsets.data(), normalsOffsets.size() );
+	scene.m_garbageCollector.push_back( scene.m_normalOffsets );
+
+	// copy indices
+	malloc( scene.m_indices, allIndices.size() );
+	copyHtoD( scene.m_indices, allIndices.data(), allIndices.size() );
+	scene.m_garbageCollector.push_back( scene.m_indices );
+
+	// copy index offsets
+	malloc( scene.m_indexOffsets, indicesOffsets.size() );
+	copyHtoD( scene.m_indexOffsets, indicesOffsets.data(), indicesOffsets.size() );
+	scene.m_garbageCollector.push_back( scene.m_indexOffsets );
+
+	// copy material indices
+	malloc( scene.m_bufMaterialIndices, materialIndices.size() );
+	copyHtoD( scene.m_bufMaterialIndices, materialIndices.data(), materialIndices.size() );
+	scene.m_garbageCollector.push_back( scene.m_bufMaterialIndices );
+
+	// copy material offset
+	malloc( scene.m_bufMatIdsPerInstance, matIdxOffset.size() );
+	copyHtoD( scene.m_bufMatIdsPerInstance, matIdxOffset.data(), matIdxOffset.size() );
+	scene.m_garbageCollector.push_back( scene.m_bufMatIdsPerInstance );
+
+	// copy materials
+	if ( shapeMaterials.empty() )
+	{ // default material to prevent crash
+		Material mat;
+		mat.m_diffuse  = hiprt::make_float3( 1.0f );
+		mat.m_emission = hiprt::make_float3( 0.0f );
+		shapeMaterials.push_back( mat );
+	}
+	malloc( scene.m_bufMaterials, shapeMaterials.size() );
+	copyHtoD( scene.m_bufMaterials, shapeMaterials.data(), shapeMaterials.size() );
+	scene.m_garbageCollector.push_back( scene.m_bufMaterials );
+
+	// copy light
+	if ( !lights.empty() )
+	{
+		malloc( scene.m_lights, lights.size() );
+		copyHtoD( scene.m_lights, lights.data(), lights.size() );
+		scene.m_garbageCollector.push_back( scene.m_lights );
+	}
+
+	// copy light num
+	malloc( scene.m_numOfLights, 1 );
+	copyHtoD( scene.m_numOfLights, &numOfLights, 1 );
+	scene.m_garbageCollector.push_back( scene.m_numOfLights );
+
+	// prepare scene
+	hiprtScene			 sceneLocal;
+	hiprtDevicePtr		 sceneTemp = nullptr;
+	hiprtSceneBuildInput sceneInput{};
+	{
+		sceneInput.instanceCount = static_cast<uint32_t>( shapes.size() );
+		
+		// Set frame type based on template parameter
+		if constexpr ( std::is_same_v<FrameType, hiprtFrameMatrix> )
+		{
+			sceneInput.frameType = hiprtFrameTypeMatrix;
+		}
+		else
+		{
+			sceneInput.frameType = hiprtFrameTypeSRT;
+		}
+		
+		malloc( reinterpret_cast<uint32_t*&>( sceneInput.instanceMasks ), sceneInput.instanceCount );
+		copyHtoD( reinterpret_cast<uint32_t*>( sceneInput.instanceMasks ), instanceMask.data(), sceneInput.instanceCount );
+		scene.m_garbageCollector.push_back( sceneInput.instanceMasks );
+
+		malloc( reinterpret_cast<hiprtInstance*&>( sceneInput.instances ), sceneInput.instanceCount );
+		copyHtoD(
+			reinterpret_cast<hiprtInstance*>( sceneInput.instances ), m_scene.m_instances.data(), sceneInput.instanceCount );
+		scene.m_garbageCollector.push_back( sceneInput.instances );
+
+		//std::vector<FrameType> frames;
+		if ( !frames.empty() )
+		{
+			sceneInput.frameCount				= sceneInput.instanceCount;
+			sceneInput.instanceTransformHeaders = nullptr;
+
+			malloc( reinterpret_cast<FrameType*&>( sceneInput.instanceFrames ), frames.size() );
+			copyHtoD( reinterpret_cast<FrameType*>( sceneInput.instanceFrames ), const_cast<FrameType*>( frames.data() ), frames.size() );
+			scene.m_garbageCollector.push_back( sceneInput.instanceFrames );
+		}
+		else if constexpr ( std::is_same_v<FrameType, hiprtFrameMatrix> )
+		{
+			// For Matrix frames, we need to provide identity matrices even when no transform is specified
+			sceneInput.frameCount				= sceneInput.instanceCount;
+			sceneInput.instanceTransformHeaders = nullptr;
+
+			// // Create identity matrix frames
+			// FrameType identityFrame{};
+			// identityFrame.matrix[0][0] = 1.0f;
+			// identityFrame.matrix[1][1] = 1.0f;
+			// identityFrame.matrix[2][2] = 1.0f;
+			// identityFrame.time		   = 0.0f;
+
+			// for ( uint32_t i = 0; i < sceneInput.instanceCount; i++ )
+			// 	frames.push_back( identityFrame );
+
+			malloc( reinterpret_cast<FrameType*&>( sceneInput.instanceFrames ), frames.size() );
+			copyHtoD( reinterpret_cast<FrameType*>( sceneInput.instanceFrames ), const_cast<FrameType*>( frames.data() ), frames.size() );
+			scene.m_garbageCollector.push_back( sceneInput.instanceFrames );
+		}
+
+		if ( ( bvhBuildFlag & 3 ) == hiprtBuildFlagBitCustomBvhImport )
+		{
+			// Embree BVH import only supported for SRT frames
+			if constexpr ( std::is_same_v<FrameType, hiprtFrameSRT> )
+			{
+				buildEmbreeSceneBvh( embreeDevice, geomBoxes, frames, sceneInput );
+				scene.m_garbageCollector.push_back( sceneInput.nodeList.leafNodes );
+				scene.m_garbageCollector.push_back( sceneInput.nodeList.internalNodes );
+			}
+			else
+			{
+				// For MatrixFrame, skip Embree import (not implemented)
+				std::cerr << "Warning: Embree BVH import not supported for MatrixFrame, skipping." << std::endl;
+			}
+		}
+
+		size_t			  sceneTempSize;
+		hiprtBuildOptions options;
+		options.buildFlags = bvhBuildFlag;
+		checkHiprt( hiprtGetSceneBuildTemporaryBufferSize( scene.m_ctx, sceneInput, options, sceneTempSize ) );
+		if ( sceneTempSize > 0 )
+		{
+			malloc( reinterpret_cast<uint8_t*&>( sceneTemp ), sceneTempSize );
+			scene.m_garbageCollector.push_back( sceneTemp );
+		}
+
+		// Store scene build data for potential motion blur updates
+		scene.m_sceneTemp	   = sceneTemp;
+		scene.m_instanceCount  = sceneInput.instanceCount;
+		scene.m_buildFlags	   = bvhBuildFlag;
+
+		checkHiprt( hiprtCreateScene( scene.m_ctx, sceneInput, options, sceneLocal ) );
+
+		std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+		checkHiprt( hiprtBuildScene( scene.m_ctx, hiprtBuildOperationBuild, sceneInput, options, sceneTemp, 0, sceneLocal ) );
+		std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+		bvhBuildTime += ( end - begin );
+
+		if ( time )
+			std::cout << "Bvh build time : " << std::chrono::duration_cast<std::chrono::milliseconds>( bvhBuildTime ).count()
+					  << " ms" << std::endl;
+		scene.m_scene = sceneLocal;
+	}
+
+	if ( ( bvhBuildFlag & 3 ) == hiprtBuildFlagBitCustomBvhImport ) rtcReleaseDevice( embreeDevice );
 }
 
 void ObjTestCases::deleteScene( SceneData& scene )
@@ -1599,3 +2126,176 @@ void ObjTestCases::render(
 
 	if ( imgPath ) validateAndWriteImage( imgPath.value(), dst, refFilename );
 }
+
+template <typename FrameType>
+void ObjTestCases::setupScene(
+	Camera&						 camera,
+	const std::filesystem::path& filename,
+	bool						 enableRayMask,
+	std::optional<FrameType>	 frame,
+	hiprtBuildFlags				 bvhBuildFlag,
+	bool						 time )
+{
+	m_camera = camera;
+	createScene<FrameType>( m_scene, filename, enableRayMask, frame, bvhBuildFlag, time );
+}
+
+template <typename FrameType>
+void ObjTestCases::setupSceneMotionBlur(
+	Camera&							camera,
+	const std::filesystem::path&	filename,
+	const std::vector<FrameType>&	frames,
+	bool							enableRayMask,
+	hiprtBuildFlags					bvhBuildFlag,
+	bool							time )
+{
+	m_camera = camera;
+	
+	// First create the scene with a single frame to set up geometry
+	if constexpr ( std::is_same_v<FrameType, hiprtFrameMatrix> )
+		std::cout << "setupSceneMotionBlur: Using hiprtFrameMatrix, frameCount=" << frames.size() << std::endl;
+	else
+		std::cout << "setupSceneMotionBlur: Using hiprtFrameSRT, frameCount=" << frames.size() << std::endl;
+	
+	//std::optional<FrameType> singleFrame = frames.empty() ? std::nullopt : std::make_optional(frames[0]);
+	createScene<FrameType>( m_scene, filename, enableRayMask, frames, bvhBuildFlag, time );
+	
+	if ( frames.size() <= 1 )
+		return; // No motion blur needed
+	
+	// Now rebuild the scene with all motion blur frames
+	// For Cornell Box, we apply the same motion blur frames to all instances
+	hiprtSceneBuildInput sceneInput{};
+	sceneInput.instanceCount = m_scene.m_instanceCount;
+	
+	// frameCount should be the TOTAL number of frames in the array when using instanceTransformHeaders
+	// Each instance will have frames.size() frames, indexed via transformHeaders
+	const size_t totalFrames = m_scene.m_instanceCount * frames.size();
+	sceneInput.frameCount	 = static_cast<uint32_t>( totalFrames );
+	
+	// Set frame type based on template parameter
+	if constexpr ( std::is_same_v<FrameType, hiprtFrameMatrix> )
+	{
+		std::cout << "setupSceneMotionBlur: Setting frameType to hiprtFrameTypeMatrix (1)" << std::endl;
+		sceneInput.frameType = hiprtFrameTypeMatrix;
+	}
+	else
+	{
+		std::cout << "setupSceneMotionBlur: Setting frameType to hiprtFrameTypeSRT (0)" << std::endl;
+		sceneInput.frameType = hiprtFrameTypeSRT;
+	}
+	
+	// Copy instances
+	sceneInput.instances = nullptr;
+	malloc( reinterpret_cast<hiprtInstance*&>( sceneInput.instances ), m_scene.m_instanceCount );
+	copyHtoD( reinterpret_cast<hiprtInstance*>( sceneInput.instances ), m_scene.m_instances.data(), m_scene.m_instanceCount );
+	m_scene.m_garbageCollector.push_back( sceneInput.instances );
+	
+	// Copy instance masks (all enabled)
+	sceneInput.instanceMasks = nullptr;
+	malloc( reinterpret_cast<uint32_t*&>( sceneInput.instanceMasks ), m_scene.m_instanceCount );
+	std::vector<uint32_t> masks( m_scene.m_instanceCount, hiprtFullRayMask );
+	copyHtoD( reinterpret_cast<uint32_t*>( sceneInput.instanceMasks ), masks.data(), m_scene.m_instanceCount );
+	m_scene.m_garbageCollector.push_back( sceneInput.instanceMasks );
+	
+	// Set up frames - all instances share the same motion blur frames
+	// When instanceTransformHeaders is nullptr, we need to provide frames for each instance
+	// Total frames = instanceCount * frames.size()
+	std::vector<hiprtTransformHeader> transformHeaders; // empty
+
+
+ 	sceneInput.instanceTransformHeaders = nullptr;
+	
+	// totalFrames already calculated above
+	malloc( reinterpret_cast<FrameType*&>( sceneInput.instanceFrames ), totalFrames );
+	
+	// Replicate frames for each instance
+	std::vector<FrameType> allFrames( totalFrames );
+	for ( size_t i = 0; i < m_scene.m_instanceCount; ++i )
+	{
+		hiprtTransformHeader header{};
+		header.frameCount = static_cast<uint32_t>( frames.size() );
+		header.frameIndex = static_cast<uint32_t>( i * frames.size() );	
+		transformHeaders.push_back( header );
+
+		for ( size_t j = 0; j < frames.size(); ++j )
+		{
+			allFrames[i * frames.size() + j] = frames[j];
+		}
+	}
+	copyHtoD( reinterpret_cast<FrameType*>( sceneInput.instanceFrames ), allFrames.data(), totalFrames );
+	m_scene.m_garbageCollector.push_back( sceneInput.instanceFrames );
+	
+	malloc( reinterpret_cast<hiprtTransformHeader*&>( sceneInput.instanceTransformHeaders ), transformHeaders.size() );
+	copyHtoD( reinterpret_cast<hiprtTransformHeader*>( sceneInput.instanceTransformHeaders ), transformHeaders.data(), transformHeaders.size() );
+	m_scene.m_garbageCollector.push_back( sceneInput.instanceTransformHeaders );
+	
+	// Reallocate temporary buffer for motion blur build (frame count has changed)
+	hiprtBuildOptions options;
+	options.buildFlags = bvhBuildFlag;
+	
+	size_t newSceneTempSize;
+	checkHiprt( hiprtGetSceneBuildTemporaryBufferSize( m_scene.m_ctx, sceneInput, options, newSceneTempSize ) );
+	
+	// Free old temp buffer and allocate new one if size has changed
+	if ( newSceneTempSize > 0 )
+	{
+		// Note: old sceneTemp is in garbage collector, will be freed at test teardown
+		hiprtDevicePtr newSceneTemp = nullptr;
+		malloc( reinterpret_cast<uint8_t*&>( newSceneTemp ), newSceneTempSize );
+		m_scene.m_garbageCollector.push_back( newSceneTemp );
+		m_scene.m_sceneTemp = newSceneTemp;
+	}
+	
+	// Rebuild scene with motion blur
+	checkHiprt( hiprtBuildScene( m_scene.m_ctx, hiprtBuildOperationBuild, sceneInput, options, m_scene.m_sceneTemp, 0, m_scene.m_scene ) );
+}
+
+// Explicit template instantiations
+template void ObjTestCases::createScene<hiprtFrameSRT>(
+	SceneData&					 scene,
+	const std::filesystem::path& filename,
+	bool						 enableRayMask,
+	std::optional<hiprtFrameSRT> frame,
+	hiprtBuildFlags				 bvhBuildFlag,
+	bool						 time );
+
+template void ObjTestCases::createScene<hiprtFrameMatrix>(
+	SceneData&						scene,
+	const std::filesystem::path&	filename,
+	bool							enableRayMask,
+	std::optional<hiprtFrameMatrix> frame,
+	hiprtBuildFlags					bvhBuildFlag,
+	bool							time );
+
+template void ObjTestCases::setupScene<hiprtFrameSRT>(
+	Camera&						 camera,
+	const std::filesystem::path& filename,
+	bool						 enableRayMask,
+	std::optional<hiprtFrameSRT> frame,
+	hiprtBuildFlags				 bvhBuildFlag,
+	bool						 time );
+
+template void ObjTestCases::setupScene<hiprtFrameMatrix>(
+	Camera&							camera,
+	const std::filesystem::path&	filename,
+	bool							enableRayMask,
+	std::optional<hiprtFrameMatrix> frame,
+	hiprtBuildFlags					bvhBuildFlag,
+	bool							time );
+
+template void ObjTestCases::setupSceneMotionBlur<hiprtFrameSRT>(
+	Camera&							camera,
+	const std::filesystem::path&	filename,
+	const std::vector<hiprtFrameSRT>& frames,
+	bool							enableRayMask,
+	hiprtBuildFlags					bvhBuildFlag,
+	bool							time );
+
+template void ObjTestCases::setupSceneMotionBlur<hiprtFrameMatrix>(
+	Camera&								 camera,
+	const std::filesystem::path&		 filename,
+	const std::vector<hiprtFrameMatrix>& frames,
+	bool								 enableRayMask,
+	hiprtBuildFlags						 bvhBuildFlag,
+	bool								 time );

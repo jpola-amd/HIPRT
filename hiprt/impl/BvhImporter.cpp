@@ -126,9 +126,11 @@ void BvhImporter::build(
 
 	NodeList nodes( buildInput.nodeList );
 
+	//context.logInfo( "BvhImporter::build - frameType: ", buildInput.frameType, " (0=SRT, 1=Matrix), frameCount: ", buildInput.frameCount, "\n" );
 	switch ( buildInput.frameType )
 	{
 	case hiprtFrameTypeSRT: {
+		//context.logInfo( "BvhImporter::build - Creating InstanceList<SRTFrame>\n" );
 		InstanceList<SRTFrame> list( buildInput );
 		if ( context.getRtip() >= 31 )
 			build<Box8Node, HwInstanceNode>(
@@ -139,6 +141,7 @@ void BvhImporter::build(
 		break;
 	}
 	case hiprtFrameTypeMatrix: {
+		//context.logInfo( "BvhImporter::build - Creating InstanceList<MatrixFrame>\n" );
 		InstanceList<MatrixFrame> list( buildInput );
 		if ( context.getRtip() >= 31 )
 			build<Box8Node, HwInstanceNode>(
@@ -201,9 +204,11 @@ void BvhImporter::update(
 
 	NodeList nodes( buildInput.nodeList );
 
+	//context.logInfo( "BvhImporter::update - frameType: ", buildInput.frameType, " (0=SRT, 1=Matrix), frameCount: ", buildInput.frameCount, "\n" );
 	switch ( buildInput.frameType )
 	{
 	case hiprtFrameTypeSRT: {
+		//context.logInfo( "BvhImporter::update - Creating InstanceList<SRTFrame>\n" );
 		InstanceList<SRTFrame> list( buildInput );
 		if ( context.getRtip() >= 31 )
 			update<Box8Node, HwInstanceNode>( context, list, nodes, buildOptions, stream, storageMemoryArena );
@@ -212,6 +217,7 @@ void BvhImporter::update(
 		break;
 	}
 	case hiprtFrameTypeMatrix: {
+		//context.logInfo( "BvhImporter::update - Creating InstanceList<MatrixFrame>\n" );
 		InstanceList<MatrixFrame> list( buildInput );
 		if ( context.getRtip() >= 31 )
 			update<Box8Node, HwInstanceNode>( context, list, nodes, buildOptions, stream, storageMemoryArena );

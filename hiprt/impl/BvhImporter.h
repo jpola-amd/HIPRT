@@ -179,6 +179,7 @@ void BvhImporter::build(
 		if constexpr ( std::is_same<PrimitiveContainer, InstanceList<MatrixFrame>>::value )
 		{
 			// Direct MatrixFrame storage path
+			//context.logInfo( "BvhImporter: Using Direct MatrixFrame storage path, frameCount: ", primitives.getFrameCount(), "\n" );
 			MatrixFrame* frames = storageMemoryArena.allocate<MatrixFrame>( primitives.getFrameCount() );
 			primitives.setFrames( frames );
 			
@@ -195,6 +196,7 @@ void BvhImporter::build(
 		else
 		{
 			// Legacy Frame conversion path
+			//context.logInfo( "BvhImporter: Using Legacy Frame conversion path, frameCount: ", primitives.getFrameCount(), "\n" );
 			Frame* frames = storageMemoryArena.allocate<Frame>( primitives.getFrameCount() );
 			primitives.setFrames( frames );
 			

@@ -267,6 +267,8 @@ __device__ void InitSceneData(
 		sceneHeader->m_frameCount	  = instanceList.getFrameCount();
 		sceneHeader->m_frameFormat	  = ConvertToFrame ? 0u : 1u; // 0 = Frame, 1 = MatrixFrame
 		sceneHeader->m_rtip			  = Rtip;
+		// printf("InitSceneData: frameFormat=%u (0=Frame,1=MatrixFrame), frameCount=%u, ConvertToFrame=%d\n", 
+		// 	sceneHeader->m_frameFormat, sceneHeader->m_frameCount, (int)ConvertToFrame);
 	}
 }
 
@@ -310,6 +312,9 @@ extern "C" __global__ void InitSceneData_InstanceList_MatrixFrame_Direct(
 	uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
 	
 	// Copy MatrixFrame data directly without conversion
+	// if ( index == 0 )
+	// 	printf("InitSceneData_MatrixFrame_Direct: Copying %u MatrixFrames directly (no conversion)\n", instanceList.getFrameCount());
+	
 	if ( index < instanceList.getFrameCount() )
 	{
 		frames[index] = instanceList.getApiFrames()[index];
@@ -483,6 +488,11 @@ extern "C" __global__ void __launch_bounds__( BvhBuilderReductionBlockSize )
 extern "C" __global__ void __launch_bounds__( BvhBuilderReductionBlockSize )
 	ComputeCentroidBox_InstanceList_MatrixFrame( InstanceList<MatrixFrame> primitives, Aabb* centroidBox )
 {
+	// if (threadIdx.x == 0 && blockIdx.x == 0)
+	// {
+	// 	printf("DEBUG ComputeCentroidBox kernel: primitives.getFrames() = %p, getCount() = %u, getFrameCount() = %u\n",
+	// 		   primitives.getFrames(), primitives.getCount(), primitives.getFrameCount());
+	// }
 	ComputeCentroidBox<InstanceList<MatrixFrame>>( primitives, centroidBox );
 }
 

@@ -246,6 +246,9 @@ class ObjTestCases : public hiprtTest
 		std::vector<hiprtInstance> m_instances;
 		std::vector<void*>		   m_garbageCollector;
 		hiprtContext			   m_ctx;
+		hiprtDevicePtr			   m_sceneTemp = nullptr;
+		uint32_t				   m_instanceCount = 0;
+		hiprtBuildFlags			   m_buildFlags = hiprtBuildFlagBitPreferFastBuild;
 	};
 
 	template <TestCasesType T>
@@ -279,21 +282,41 @@ class ObjTestCases : public hiprtTest
 		return camera;
 	}
 
+	template <typename FrameType>
 	void createScene(
 		SceneData&					 scene,
 		const std::filesystem::path& filename,
 		bool						 enableRayMask = false,
-		std::optional<hiprtFrameSRT> frame		   = std::nullopt,
+		std::optional<FrameType>	 frame		   = std::nullopt,
 		hiprtBuildFlags				 bvhBuildFlag  = hiprtBuildFlagBitPreferFastBuild,
 		bool						 time		   = false );
 
+	template <typename FrameType>
+	void createScene(
+		SceneData&					 scene,
+		const std::filesystem::path& filename,
+		bool						 enableRayMask = false,
+		const std::vector<FrameType>& frames = {},
+		hiprtBuildFlags				 bvhBuildFlag  = hiprtBuildFlagBitPreferFastBuild,
+		bool						 time		   = false );
+
+	template <typename FrameType = hiprtFrameSRT>
 	void setupScene(
 		Camera&						 camera,
 		const std::filesystem::path& filename,
 		bool						 enableRayMask = false,
-		std::optional<hiprtFrameSRT> frame		   = std::nullopt,
+		std::optional<FrameType>	 frame		   = std::nullopt,
 		hiprtBuildFlags				 bvhBuildFlag  = hiprtBuildFlagBitPreferFastBuild,
 		bool						 time		   = false );
+
+	template <typename FrameType = hiprtFrameSRT>
+	void setupSceneMotionBlur(
+		Camera&							 camera,
+		const std::filesystem::path&	 filename,
+		const std::vector<FrameType>&	 frames,
+		bool							 enableRayMask = false,
+		hiprtBuildFlags					 bvhBuildFlag  = hiprtBuildFlagBitPreferFastBuild,
+		bool							 time		   = false );
 
 	void deleteScene( SceneData& scene );
 
@@ -315,6 +338,34 @@ class ObjTestCases : public hiprtTest
   public:
 	SceneData m_scene;
 	Camera	  m_camera;
+};
+
+class ObjTestCasesMatrix : public ObjTestCases
+{
+  public:
+	template <TestCasesType T>
+	void setupSceneMatrix(
+		const std::filesystem::path& filename,
+		bool						 enableRayMask = false,
+		std::optional<hiprtFrameMatrix> frame		   = std::nullopt,
+		hiprtBuildFlags				 bvhBuildFlag  = hiprtBuildFlagBitPreferFastBuild,
+		bool						 time		   = false )
+	{
+		m_camera = createCamera<T>();
+		setupScene<hiprtFrameMatrix>( m_camera, filename, enableRayMask, frame, bvhBuildFlag, time );
+	}
+
+	template <TestCasesType T>
+	void setupSceneMatrixMotionBlur(
+		const std::filesystem::path&		 filename,
+		const std::vector<hiprtFrameMatrix>& frames,
+		bool								 enableRayMask = false,
+		hiprtBuildFlags						 bvhBuildFlag	= hiprtBuildFlagBitPreferFastBuild,
+		bool								 time			= false )
+	{
+		m_camera = createCamera<T>();
+		setupSceneMotionBlur<hiprtFrameMatrix>( m_camera, filename, frames, enableRayMask, bvhBuildFlag, time );
+	}
 };
 
 class PerformanceTestCases : public ObjTestCases

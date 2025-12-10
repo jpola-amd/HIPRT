@@ -144,14 +144,26 @@ HIPRT_HOST_DEVICE HIPRT_INLINE float3 subUp( float3 a, float3 b )
 HIPRT_HOST_DEVICE HIPRT_INLINE bool copyInvTransformMatrix( const Frame& frame, float ( &matrix )[3][4] )
 {
 	const MatrixFrame invMatrixFrame = MatrixFrame::getMatrixFrameInv( frame );
-	memcpy( &matrix[0][0], &invMatrixFrame.m_matrix[0][0], sizeof( float ) * 12 );
+	memcpy( &matrix, &invMatrixFrame.m_matrix, sizeof( float ) * 12 );
+// #if defined( __KERNELCC__ ) && !defined( NDEBUG )
+// 	printf( "Frame→InvMatrix: [%.2f %.2f %.2f %.2f] [%.2f %.2f %.2f %.2f] [%.2f %.2f %.2f %.2f]\n",
+// 			invMatrixFrame.m_matrix[0][0], invMatrixFrame.m_matrix[0][1], invMatrixFrame.m_matrix[0][2], invMatrixFrame.m_matrix[0][3],
+// 			invMatrixFrame.m_matrix[1][0], invMatrixFrame.m_matrix[1][1], invMatrixFrame.m_matrix[1][2], invMatrixFrame.m_matrix[1][3],
+// 			invMatrixFrame.m_matrix[2][0], invMatrixFrame.m_matrix[2][1], invMatrixFrame.m_matrix[2][2], invMatrixFrame.m_matrix[2][3] );
+// #endif
 	return frame.identity();
 }
 
 HIPRT_HOST_DEVICE HIPRT_INLINE bool copyInvTransformMatrix( const MatrixFrame& matrixFrame, float ( &matrix )[3][4] )
 {
 	const MatrixFrame invMatrixFrame = MatrixFrame::getMatrixFrameInv( matrixFrame );
-	memcpy( &matrix[0][0], &invMatrixFrame.m_matrix[0][0], sizeof( float ) * 12 );
+ 	memcpy( &matrix, &invMatrixFrame.m_matrix, sizeof( float ) * 12 );
+// #if defined( __KERNELCC__ ) && !defined( NDEBUG )
+// 	printf( "MatrixFrame→InvMatrix: [%.2f %.2f %.2f %.2f] [%.2f %.2f %.2f %.2f] [%.2f %.2f %.2f %.2f]\n",
+// 			invMatrixFrame.m_matrix[0][0], invMatrixFrame.m_matrix[0][1], invMatrixFrame.m_matrix[0][2], invMatrixFrame.m_matrix[0][3],
+// 			invMatrixFrame.m_matrix[1][0], invMatrixFrame.m_matrix[1][1], invMatrixFrame.m_matrix[1][2], invMatrixFrame.m_matrix[1][3],
+// 			invMatrixFrame.m_matrix[2][0], invMatrixFrame.m_matrix[2][1], invMatrixFrame.m_matrix[2][2], invMatrixFrame.m_matrix[2][3] );
+// #endif
 	return matrixFrame.identity();
 }
 
@@ -1154,10 +1166,11 @@ struct InstanceNodeBase
 // 64B
 struct alignas( 64 ) UserInstanceNode : public InstanceNodeBase
 {
+	template <typename FrameType>
 	HIPRT_HOST_DEVICE void init(
 		const uint32_t					 primIndex,
 		const uint32_t					 mask,
-		const Frame&					 frame,
+		const FrameType&				 frame,
 		const hiprtInstance&			 instance,
 		const hiprtTransformHeader&		 transform,
 		[[maybe_unused]] const uint32_t	 childCount,
@@ -1204,10 +1217,11 @@ struct alignas( 128 ) HwInstanceNode : public InstanceNodeBase
 		initChildInfos( childIndices, childBoxes, InvalidValue, *this );
 	}
 
+	template <typename FrameType>
 	HIPRT_HOST_DEVICE void init(
 		const uint32_t				primIndex,
 		const uint32_t				mask,
-		const Frame&				frame,
+		const FrameType&			frame,
 		const hiprtInstance&		instance,
 		const hiprtTransformHeader& transform,
 		const uint32_t				childCount,

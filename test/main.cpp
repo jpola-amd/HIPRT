@@ -42,7 +42,7 @@ TEST_F( PerformanceTestCases, AoRayEmbreeHairball )
 	constexpr float AoRadius = 0.5f;
 
 	Camera camera = createCamera<TestCasesType::TestHairball>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/lfs/hairball/hairball.obj",
 		false,
@@ -67,7 +67,7 @@ TEST_F( PerformanceTestCases, AoRayHairball )
 	constexpr float AoRadius = 0.5f;
 
 	Camera camera = createCamera<TestCasesType::TestHairball>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/lfs/hairball/hairball.obj",
 		false,
@@ -92,7 +92,7 @@ TEST_F( PerformanceTestCases, AoRayEmbreeBistro )
 	constexpr float AoRadius = 50.0f;
 
 	Camera camera = createCamera<TestCasesType::TestBistro>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/lfs/bistro_full/Exterior/exterior.obj",
 		false,
@@ -123,7 +123,7 @@ TEST_F( PerformanceTestCases, AoRayTransformedBistro )
 	transform.scale		  = { 1.0f, 1.0f, 1.0f };
 	transform.rotation	  = { 0.0f, 1.0f, 0.0f, 0.5f };
 
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/lfs/bistro_full/Exterior/exterior.obj",
 		false,
@@ -148,7 +148,7 @@ TEST_F( PerformanceTestCases, AoRayBistro )
 	constexpr float AoRadius = 50.0f;
 
 	Camera camera = createCamera<TestCasesType::TestBistro>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/lfs/bistro_full/Exterior/exterior.obj",
 		false,
@@ -169,7 +169,7 @@ TEST_F( PerformanceTestCases, PrimaryRayBistro )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestBistro>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/lfs/bistro_full/Exterior/exterior.obj",
 		false,
@@ -190,7 +190,7 @@ TEST_F( PerformanceTestCases, BvhFastBistro )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestBistro>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/lfs/bistro_full/Exterior/exterior.obj",
 		false,
@@ -211,7 +211,7 @@ TEST_F( PerformanceTestCases, BvhHighQBistro )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestBistro>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/lfs/bistro_full/Exterior/exterior.obj",
 		false,
@@ -232,7 +232,7 @@ TEST_F( PerformanceTestCases, BvhBalancedBistro )
 	bool			   getTimings = true;
 
 	Camera camera = createCamera<TestCasesType::TestBistro>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/lfs/bistro_full/Exterior/exterior.obj",
 		false,
@@ -260,7 +260,7 @@ TEST_F( ObjTestCases, TranslateCornellBox )
 	transform.rotation	  = { 0.0f, 0.0f, 1.0f, 0.0f };
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", false, transform );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", false, transform );
 	render(
 		"TranslateCornellBox.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "TranslateCornellBox.png" );
 	deleteScene( m_scene );
@@ -277,7 +277,7 @@ TEST_F( ObjTestCases, ScaleCornellBox )
 	transform.rotation	  = { 0.0f, 0.0f, 1.0f, 0.0f };
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", false, transform );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", false, transform );
 	render( "ScaleCornellBox.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "ScaleCornellBox.png" );
 	deleteScene( m_scene );
 }
@@ -293,7 +293,7 @@ TEST_F( ObjTestCases, RotateCornellBox )
 	transform.rotation	  = { 0.0f, 1.0f, 0.0f, 0.5f };
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", false, transform );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", false, transform );
 	render( "RotateCornellBox.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "RotateCornellBox.png" );
 	deleteScene( m_scene );
 }
@@ -314,7 +314,7 @@ TEST_F( ObjTestCases, BvhUpdateCornellBox )
 	for ( uint32_t i = 0; i < FrameCount; i++, angle += 0.1 )
 	{
 		transform.rotation = { 0.0f, 1.0f, 0.0f, angle };
-		setupScene(
+		setupScene<hiprtFrameSRT>(
 			camera,
 			getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj",
 			false,
@@ -326,7 +326,7 @@ TEST_F( ObjTestCases, BvhUpdateCornellBox )
 	}
 
 	transform.rotation = { 0.0f, 1.0f, 0.0f, angle };
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj",
 		false,
@@ -349,7 +349,7 @@ TEST_F( ObjTestCases, BvhFastCornellBox )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj",
 		false,
@@ -372,7 +372,7 @@ TEST_F( ObjTestCases, BvhHighQCornellBox )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj",
 		false,
@@ -395,7 +395,7 @@ TEST_F( ObjTestCases, BvhBalancedCornellBox )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj",
 		false,
@@ -414,7 +414,7 @@ TEST_F( ObjTestCases, BvhBalancedCornellBox )
 TEST_F( ObjTestCases, ShadowRayCornellBox )
 {
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
 	render(
 		"ShadowRayCornellBox.png",
 		getRootDir() / "test/kernels/ShadowRayKernel.h",
@@ -429,7 +429,7 @@ TEST_F( ObjTestCases, AoRayCornellBox )
 	constexpr float AoRadius = 1.4f;
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
 	render(
 		"AoRayCornellBox.png",
 		getRootDir() / "test/kernels/AoRayKernel.h",
@@ -446,7 +446,7 @@ TEST_F( ObjTestCases, AoRayEmbreeCornellBox )
 	constexpr float AoRadius = 1.4f;
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene(
+	setupScene<hiprtFrameSRT>(
 		camera,
 		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj",
 		false,
@@ -468,7 +468,7 @@ TEST_F( ObjTestCases, PrimaryRayCornellBox )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
 	render(
 		"PrimaryRayCornellBox.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "PrimaryRayCornellBox.png" );
 	deleteScene( m_scene );
@@ -480,7 +480,7 @@ TEST_F( ObjTestCases, UvsCornellBox )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
 	render( "UvsCornellBox.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "UvsCornellBox.png" );
 	deleteScene( m_scene );
 }
@@ -491,7 +491,7 @@ TEST_F( ObjTestCases, PrimIdsCornellBox )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
 	render( "PrimIdsCornellBox.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "PrimIdsCornellBox.png" );
 	deleteScene( m_scene );
 }
@@ -502,7 +502,7 @@ TEST_F( ObjTestCases, HitDistCornellBox )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
 	render( "HitDistCornellBox.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "HitDistCornellBox.png" );
 	deleteScene( m_scene );
 }
@@ -513,8 +513,270 @@ TEST_F( ObjTestCases, NormalsCornellBox )
 	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
 
 	Camera camera = createCamera<TestCasesType::TestCornellBox>();
-	setupScene( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	setupScene<hiprtFrameSRT>( camera, getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
 	render( "NormalsCornellBox.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "NormalsCornellBox.png" );
+	deleteScene( m_scene );
+}
+
+// Matrix-based Cornell Box tests
+TEST_F( ObjTestCasesMatrix, TranslateCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeColor;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	// Translation matrix: identity with translation (0, 0, -5)
+	hiprtFrameMatrix transform{};
+	transform.matrix[0][0] = 1.0f;
+	transform.matrix[1][1] = 1.0f;
+	transform.matrix[2][2] = 1.0f;
+	transform.matrix[0][3] = 0.0f;
+	transform.matrix[1][3] = 0.0f;
+	transform.matrix[2][3] = -5.0f;
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>(
+		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", false, transform );
+	render(
+		"TranslateCornellBoxMatrix.png",
+		getRootDir() / "test/kernels/PrimaryRayKernel.h",
+		kernelName,
+		"TranslateCornellBox.png" );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, ScaleCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeColor;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	// Scale matrix: 2x scale in all dimensions
+	hiprtFrameMatrix transform{};
+	transform.matrix[0][0] = 2.0f;
+	transform.matrix[1][1] = 2.0f;
+	transform.matrix[2][2] = 2.0f;
+	transform.matrix[0][3] = 0.0f;
+	transform.matrix[1][3] = 0.0f;
+	transform.matrix[2][3] = 0.0f;
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>(
+		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", false, transform );
+	render(
+		"ScaleCornellBoxMatrix.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "ScaleCornellBox.png" );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, RotateCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeColor;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	// Rotation around Y-axis by ~28.6 degrees (0.5 radians) with translation (0, 0, -3)
+	// Original SRT: rotation = {0, 1, 0, 0.5} means axis-angle with angle=0.5 rad around Y
+	const float angle = 0.5f;
+	const float c	  = cos( angle );
+	const float s	  = sin( angle );
+
+	hiprtFrameMatrix transform{};
+	transform.matrix[0][0] = c;
+	transform.matrix[0][1] = 0.0f;
+	transform.matrix[0][2] = s;
+	transform.matrix[0][3] = 0.0f;
+	transform.matrix[1][0] = 0.0f;
+	transform.matrix[1][1] = 1.0f;
+	transform.matrix[1][2] = 0.0f;
+	transform.matrix[1][3] = 0.0f;
+	transform.matrix[2][0] = -s;
+	transform.matrix[2][1] = 0.0f;
+	transform.matrix[2][2] = c;
+	transform.matrix[2][3] = -3.0f;
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>(
+		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", false, transform );
+	render(
+		"RotateCornellBoxMatrix.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "RotateCornellBox.png" );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, RotateCornellBoxMatrixMotionBlur )
+{
+	constexpr uint32_t MotionBlurKernelId = 10; // Use motion blur enabled kernel
+	const std::string  kernelName		  = "PrimaryRayKernel_" + std::to_string( MotionBlurKernelId );
+
+	// Create 5 motion blur frames, rotating from 0 to 0.5 radians around Y-axis
+	// All frames include translation (0, 0, -3)
+	std::vector<hiprtFrameMatrix> frames( 5 );
+	for ( int i = 0; i < 5; ++i )
+	{
+		const float t	  = static_cast<float>( i ) / 4.0f; // Time from 0.0 to 1.0
+		const float angle = 0.5f * t;						 // Rotate from 0 to 0.5 radians
+		const float c	  = cos( angle );
+		const float s	  = sin( angle );
+
+		frames[i].matrix[0][0] = c;
+		frames[i].matrix[0][1] = 0.0f;
+		frames[i].matrix[0][2] = s;
+		frames[i].matrix[0][3] = 0.0f;
+		frames[i].matrix[1][0] = 0.0f;
+		frames[i].matrix[1][1] = 1.0f;
+		frames[i].matrix[1][2] = 0.0f;
+		frames[i].matrix[1][3] = 0.0f;
+		frames[i].matrix[2][0] = -s;
+		frames[i].matrix[2][1] = 0.0f;
+		frames[i].matrix[2][2] = c;
+		frames[i].matrix[2][3] = -3.0f;
+
+		frames[i].time = t;
+	}
+
+	setupSceneMatrixMotionBlur<TestCasesType::TestCornellBox>(
+		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj", frames, false );
+	render(
+		"RotateCornellBoxMatrixMotionBlur.png",
+		getRootDir() / "test/kernels/PrimaryRayKernel.h",
+		kernelName,
+		std::nullopt ); // No reference - motion blur creates different output
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, BvhFastCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeColor;
+	constexpr bool	   Timings	  = true;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>(
+		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj",
+		false,
+		std::nullopt,
+		hiprtBuildFlagBitPreferFastBuild,
+		Timings );
+	render(
+		"BvhFastCornellBoxMatrix.png",
+		getRootDir() / "test/kernels/PrimaryRayKernel.h",
+		kernelName,
+		"PrimaryRayCornellBox.png",
+		Timings );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, BvhHighQCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeColor;
+	constexpr bool	   Timings	  = true;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>(
+		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj",
+		false,
+		std::nullopt,
+		hiprtBuildFlagBitPreferHighQualityBuild,
+		Timings );
+	render(
+		"BvhHighQCornellBoxMatrix.png",
+		getRootDir() / "test/kernels/PrimaryRayKernel.h",
+		kernelName,
+		"PrimaryRayCornellBox.png",
+		Timings );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, BvhBalancedCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeColor;
+	constexpr bool	   Timings	  = true;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>(
+		getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj",
+		false,
+		std::nullopt,
+		hiprtBuildFlagBitPreferBalancedBuild,
+		Timings );
+	render(
+		"BvhBalancedCornellBoxMatrix.png",
+		getRootDir() / "test/kernels/PrimaryRayKernel.h",
+		kernelName,
+		"PrimaryRayCornellBox.png",
+		Timings );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, ShadowRayCornellBoxMatrix )
+{
+	setupSceneMatrix<TestCasesType::TestCornellBox>( getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	render(
+		"ShadowRayCornellBoxMatrix.png",
+		getRootDir() / "test/kernels/ShadowRayKernel.h",
+		"ShadowRayKernel",
+		"ShadowRayCornellBox.png" );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, AoRayCornellBoxMatrix )
+{
+	constexpr bool	Timings	 = true;
+	constexpr float AoRadius = 1.4f;
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>( getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	render(
+		"AoRayCornellBoxMatrix.png",
+		getRootDir() / "test/kernels/AoRayKernel.h",
+		"AoRayKernel",
+		"AoRayCornellBox.png",
+		Timings,
+		AoRadius );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, UvsCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeUv;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>( getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	render(
+		"UvsCornellBoxMatrix.png",
+		getRootDir() / "test/kernels/PrimaryRayKernel.h",
+		kernelName,
+		"UvsCornellBox.png" );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, PrimIdsCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeId;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>( getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	render(
+		"PrimIdsCornellBoxMatrix.png", getRootDir() / "test/kernels/PrimaryRayKernel.h", kernelName, "PrimIdsCornellBox.png" );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, HitDistCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeHitDist;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>( getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	render(
+		"HitDistCornellBoxMatrix.png",
+		getRootDir() / "test/kernels/PrimaryRayKernel.h",
+		kernelName,
+		"HitDistCornellBox.png" );
+	deleteScene( m_scene );
+}
+
+TEST_F( ObjTestCasesMatrix, NormalsCornellBoxMatrix )
+{
+	constexpr uint32_t Option	  = VisualizeNormal;
+	const std::string  kernelName = "PrimaryRayKernel_" + std::to_string( Option );
+
+	setupSceneMatrix<TestCasesType::TestCornellBox>( getRootDir() / "test/common/meshes/cornellbox/cornellBox.obj" );
+	render(
+		"NormalsCornellBoxMatrix.png",
+		getRootDir() / "test/kernels/PrimaryRayKernel.h",
+		kernelName,
+		"NormalsCornellBox.png" );
 	deleteScene( m_scene );
 }
 

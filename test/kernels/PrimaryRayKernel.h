@@ -99,7 +99,7 @@ __device__ uint3 getColor<VisualizeNormal>(
 	return color;
 }
 
-template <uint32_t Option>
+template <uint32_t Option, bool EnableMotionBlur = false>
 __device__ void PrimaryRayKernel(
 	hiprtScene			   scene,
 	uint8_t*			   image,
@@ -129,11 +129,43 @@ __device__ void PrimaryRayKernel(
 	Stack		  stack( globalStackBuffer, sharedStackBuffer );
 	InstanceStack instanceStack;
 
-	hiprtRay													ray = generateRay( x, y, resolution, camera, seed, false );
-	hiprtSceneTraversalClosestCustomStack<Stack, InstanceStack> tr( scene, ray, stack, instanceStack );
+	if constexpr ( EnableMotionBlur )
 	{
-		hiprtHit hit = tr.getNextHit();
-		uint3	 color{};
+		// Sample multiple rays with different time values for motion blur
+		constexpr uint32_t MotionBlurSamples = 8;
+		float3			   accumulatedColor{};
+
+		for ( uint32_t sample = 0; sample < MotionBlurSamples; ++sample )
+		{
+			hiprtRay ray  = generateRay( x, y, resolution, camera, seed, true );
+			float	 time = randf( seed ); // Sample random time for motion blur
+
+			hiprtSceneTraversalClosestCustomStack<Stack, InstanceStack> tr(
+				scene, ray, stack, instanceStack, hiprtFullRayMask, hiprtTraversalHintDefault, nullptr, nullptr, 0, time );
+			hiprtHit hit = tr.getNextHit();
+			uint3	 color{0, 0, 0};
+			if ( hit.hasHit() ) color = {128, 128, 128};//getColor<Option>( scene, hit, matIndices, materials, matOffsetPerInstance );
+
+			accumulatedColor.x += color.x;
+			accumulatedColor.y += color.y;
+			accumulatedColor.z += color.z;
+		}
+
+		// Average the samples
+		accumulatedColor = accumulatedColor / static_cast<float>( MotionBlurSamples );
+
+		image[index * 4 + 0] = static_cast<uint8_t>( accumulatedColor.x );
+		image[index * 4 + 1] = static_cast<uint8_t>( accumulatedColor.y );
+		image[index * 4 + 2] = static_cast<uint8_t>( accumulatedColor.z );
+		image[index * 4 + 3] = 255;
+	}
+	else
+	{
+		// Single sample without motion blur (time = 0.0)
+		hiprtRay													ray = generateRay( x, y, resolution, camera, seed, false );
+		hiprtSceneTraversalClosestCustomStack<Stack, InstanceStack> tr( scene, ray, stack, instanceStack );
+		hiprtHit													 hit = tr.getNextHit();
+		uint3														 color{};
 		if ( hit.hasHit() ) color = getColor<Option>( scene, hit, matIndices, materials, matOffsetPerInstance );
 
 		image[index * 4 + 0] = color.x;
@@ -196,6 +228,42 @@ extern "C" __global__ void PrimaryRayKernel_1(
 	float				   aoRadius )
 {
 	PrimaryRayKernel<VisualizeUv>(
+		scene,
+		image,
+		resolution,
+		globalStackBuffer,
+		camera,
+		matIndices,
+		materials,
+		matOffsetPerInstance,
+		indices,
+		indxOffsets,
+		normals,
+		normOffset,
+		numOfLights,
+		lights,
+		aoRadius );
+}
+
+// Motion blur variants (EnableMotionBlur = true)
+extern "C" __global__ void PrimaryRayKernel_10(
+	hiprtScene			   scene,
+	uint8_t*			   image,
+	uint2				   resolution,
+	hiprtGlobalStackBuffer globalStackBuffer,
+	Camera				   camera,
+	uint32_t*			   matIndices,
+	Material*			   materials,
+	uint32_t*			   matOffsetPerInstance,
+	uint32_t*			   indices,
+	uint32_t*			   indxOffsets,
+	float3*				   normals,
+	uint32_t*			   normOffset,
+	uint32_t*			   numOfLights,
+	Light*				   lights,
+	float				   aoRadius )
+{
+	PrimaryRayKernel<VisualizeColor, true>(
 		scene,
 		image,
 		resolution,

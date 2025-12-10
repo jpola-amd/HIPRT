@@ -133,9 +133,11 @@ void PlocBuilder::build(
 	MemoryArena	 storageMemoryArena( buffer, storageSize, DefaultAlignment );
 	MemoryArena	 temporaryMemoryArena( temporaryBuffer, tempSize, DefaultAlignment );
 
+	//context.logInfo( "PlocBuilder::build - frameType: ", buildInput.frameType, " (0=SRT, 1=Matrix), frameCount: ", buildInput.frameCount, "\n" );
 	switch ( buildInput.frameType )
 	{
 	case hiprtFrameTypeSRT: {
+		//context.logInfo( "PlocBuilder::build - Creating InstanceList<SRTFrame>\n" );
 		InstanceList<SRTFrame> list( buildInput );
 		if ( context.getRtip() >= 31 )
 			build<Box8Node, HwInstanceNode>(
@@ -146,6 +148,7 @@ void PlocBuilder::build(
 		break;
 	}
 	case hiprtFrameTypeMatrix: {
+		//context.logInfo( "PlocBuilder::build - Creating InstanceList<MatrixFrame>\n" );
 		InstanceList<MatrixFrame> list( buildInput );
 		if ( context.getRtip() >= 31 )
 			build<Box8Node, HwInstanceNode>(
@@ -205,9 +208,11 @@ void PlocBuilder::update(
 	const size_t storageSize = getStorageBufferSize( context, buildInput, buildOptions );
 	MemoryArena	 storageMemoryArena( buffer, storageSize, DefaultAlignment );
 
+	//context.logInfo( "PlocBuilder::update - frameType: ", buildInput.frameType, " (0=SRT, 1=Matrix), frameCount: ", buildInput.frameCount, "\n" );
 	switch ( buildInput.frameType )
 	{
 	case hiprtFrameTypeSRT: {
+		//context.logInfo( "PlocBuilder::update - Creating InstanceList<SRTFrame>\n" );
 		InstanceList<SRTFrame> list( buildInput );
 		if ( context.getRtip() >= 31 )
 			update<Box8Node, HwInstanceNode>( context, list, buildOptions, stream, storageMemoryArena );
@@ -216,6 +221,7 @@ void PlocBuilder::update(
 		break;
 	}
 	case hiprtFrameTypeMatrix: {
+		//context.logInfo( "PlocBuilder::update - Creating InstanceList<MatrixFrame>\n" );
 		InstanceList<MatrixFrame> list( buildInput );
 		if ( context.getRtip() >= 31 )
 			update<Box8Node, HwInstanceNode>( context, list, buildOptions, stream, storageMemoryArena );
