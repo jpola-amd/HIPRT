@@ -581,3 +581,12 @@ HIPRT_DEVICE float3 hiprtVectorObjectToWorld(
  */
 HIPRT_DEVICE float3 hiprtVectorWorldToObject(
 	const float3& vector, hiprtScene scene, const uint32_t ( &instanceIDs )[hiprtMaxInstanceLevels], float time = 0.0f );
+
+
+HIPRT_DEVICE hiprtFrameSRT hiprtGetObjectToWorldFrameSRT( hiprtScene scene, uint32_t instanceID, float time );
+
+HIPRT_DEVICE hiprtFrameSRT hiprtGetWorldToObjectFrameSRT( hiprtScene scene, uint32_t instanceID, float time );
+
+HIPRT_DEVICE hiprtFrameMatrix hiprtGetObjectToWorldFrameMatrix( hiprtScene scene, uint32_t instanceID, float time );
+
+HIPRT_DEVICE hiprtFrameMatrix hiprtGetWorldToObjectFrameMatrix( hiprtScene scene, uint32_t instanceID, float time );
