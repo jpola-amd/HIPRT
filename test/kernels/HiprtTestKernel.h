@@ -325,6 +325,46 @@ extern "C" __global__ void SceneIntersectionKernel( hiprtScene scene, uint8_t* i
 	}
 }
 
+extern "C" __global__ void SceneIntersectionKernel4( hiprtScene scene, uint8_t* image, hiprtFuncTable table, uint2 resolution )
+{
+	const uint32_t x	 = blockIdx.x * blockDim.x + threadIdx.x;
+	const uint32_t y	 = blockIdx.y * blockDim.y + threadIdx.y;
+	const uint32_t index = x + y * resolution.x;
+
+	hiprtRay	 ray;
+	const float3 o = { x / static_cast<float>( resolution.x ), y / static_cast<float>( resolution.y ), -1.0f };
+	const float3 d = { 0.0f, 0.0f, 1.0f };
+	ray.origin	   = o;
+	ray.direction  = d;
+	ray.maxT	   = 1000.0f;
+
+	hiprtSceneTraversalAnyHit tr( scene, ray, hiprtFullRayMask, hiprtTraversalHintDefault, nullptr, table );
+	while ( true )
+	{
+		hiprtHit hit = tr.getNextHit();
+
+		uint3 color = { 0, 0, 0 };
+		if ( hit.hasHit() )
+		{
+			// Transform the world-space hit point back to object space using the full
+			// 4-level instance chain. With the ObjectToWorld bug this produces garbage;
+			// with the fix the result is deterministic (geometry lives in [0,1] x [0,1]).
+			const float3 hitWorld = ray.origin + hit.t * ray.direction;
+			const float3 hitObj	  = hiprtPointWorldToObject( hitWorld, scene, hit.instanceIDs, 0.0f );
+			color.x				  = static_cast<uint8_t>( hiprt::clamp( hitObj.x, 0.0f, 1.0f ) * 255 );
+			color.y				  = static_cast<uint8_t>( hiprt::clamp( hitObj.y, 0.0f, 1.0f ) * 255 );
+			color.z				  = 128;
+		}
+
+		image[index * 4 + 0] += color.x;
+		image[index * 4 + 1] += color.y;
+		image[index * 4 + 2] += color.z;
+		image[index * 4 + 3] = 255;
+
+		if ( tr.getCurrentState() == hiprtTraversalStateFinished ) break;
+	}
+}
+
 extern "C" __global__ void MotionBlurKernel( hiprtScene scene, uint8_t* image, uint2 resolution )
 {
 	const uint32_t x	 = blockIdx.x * blockDim.x + threadIdx.x;

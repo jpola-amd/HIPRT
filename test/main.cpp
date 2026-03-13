@@ -1899,6 +1899,314 @@ TEST_F( hiprtTest, SceneIntersectionMlas )
 	checkHiprt( hiprtDestroyContext( ctxt ) );
 }
 
+// Exercises all hiprtMaxInstanceLevels (4) levels of scene instancing:
+//   sceneTop(L4) -> sceneL3 -> sceneL2 -> sceneL1(circles + tris)
+// This reaches the maximum instance depth and validates the full ObjectToWorld transform chain.
+TEST_F( hiprtTest, SceneIntersectionMlas4 )
+{
+	hiprtContext ctxt;
+	checkHiprt( hiprtCreateContext( HIPRT_API_VERSION, m_ctxtInput, ctxt ) );
+	checkHiprt( hiprtSetLogLevel( ctxt, hiprtLogLevelError | hiprtLogLevelWarn ) );
+
+	hiprtGeometry		   geomCircles;
+	hiprtDevicePtr		   geomTempCircles;
+	hiprtAABBListPrimitive list;
+	{
+		list.aabbCount	= 3;
+		list.aabbStride = 2 * sizeof( float4 );
+		malloc( reinterpret_cast<float4*&>( list.aabbs ), 6 );
+
+		float4 b[] = {
+			{ 0.15f, 0.40f, 1.0f, 0.0f },
+			{ 0.35f, 0.60f, 1.0f, 0.0f },
+			{ 0.40f, 0.40f, 1.0f, 0.0f },
+			{ 0.60f, 0.60f, 1.0f, 0.0f },
+			{ 0.65f, 0.40f, 1.0f, 0.0f },
+			{ 0.85f, 0.60f, 1.0f, 0.0f } };
+		copyHtoD( reinterpret_cast<float4*>( list.aabbs ), b, 6 );
+
+		hiprtGeometryBuildInput geomInput;
+		geomInput.type				 = hiprtPrimitiveTypeAABBList;
+		geomInput.primitive.aabbList = list;
+		geomInput.geomType			 = 0;
+
+		size_t			  geomTempSize;
+		hiprtBuildOptions options;
+		options.buildFlags = hiprtBuildFlagBitPreferFastBuild;
+		checkHiprt( hiprtGetGeometryBuildTemporaryBufferSize( ctxt, geomInput, options, geomTempSize ) );
+		malloc( reinterpret_cast<uint8_t*&>( geomTempCircles ), geomTempSize );
+
+		checkHiprt( hiprtCreateGeometry( ctxt, geomInput, options, geomCircles ) );
+		checkHiprt( hiprtBuildGeometry( ctxt, hiprtBuildOperationBuild, geomInput, options, geomTempCircles, 0, geomCircles ) );
+	}
+
+	hiprtGeometry			   geomTris;
+	hiprtDevicePtr			   geomTempTris;
+	hiprtTriangleMeshPrimitive mesh;
+	{
+		mesh.triangleCount	= 3;
+		mesh.triangleStride = sizeof( uint3 );
+		malloc( reinterpret_cast<uint3*&>( mesh.triangleIndices ), mesh.triangleCount );
+		std::vector<uint32_t> idx( 3 * mesh.triangleCount );
+		std::iota( idx.begin(), idx.end(), 0 );
+		copyHtoD(
+			reinterpret_cast<uint3*>( mesh.triangleIndices ), reinterpret_cast<uint3*>( idx.data() ), mesh.triangleCount );
+
+		mesh.vertexCount  = 9;
+		mesh.vertexStride = sizeof( float3 );
+		malloc( reinterpret_cast<float3*&>( mesh.vertices ), mesh.vertexCount );
+		float3 v[] = {
+			{ 0.15f, 0.40f, 0.0f },
+			{ 0.35f, 0.40f, 0.0f },
+			{ 0.25f, 0.60f, 0.0f },
+			{ 0.40f, 0.40f, 0.0f },
+			{ 0.60f, 0.40f, 0.0f },
+			{ 0.50f, 0.60f, 0.0f },
+			{ 0.65f, 0.40f, 0.0f },
+			{ 0.85f, 0.40f, 0.0f },
+			{ 0.75f, 0.60f, 0.0f } };
+		copyHtoD( reinterpret_cast<float3*>( mesh.vertices ), v, mesh.vertexCount );
+
+		hiprtGeometryBuildInput geomInput;
+		geomInput.type					 = hiprtPrimitiveTypeTriangleMesh;
+		geomInput.primitive.triangleMesh = mesh;
+
+		size_t			  geomTempSize;
+		hiprtBuildOptions options;
+		options.buildFlags = hiprtBuildFlagBitPreferFastBuild;
+		checkHiprt( hiprtGetGeometryBuildTemporaryBufferSize( ctxt, geomInput, options, geomTempSize ) );
+		malloc( reinterpret_cast<uint8_t*&>( geomTempTris ), geomTempSize );
+
+		checkHiprt( hiprtCreateGeometry( ctxt, geomInput, options, geomTris ) );
+		checkHiprt( hiprtBuildGeometry( ctxt, hiprtBuildOperationBuild, geomInput, options, geomTempTris, 0, geomTris ) );
+	}
+
+	// Level 1 (leaf): circles + tris with a small Y offset between them
+	hiprtScene			 sceneL1;
+	hiprtDevicePtr		 sceneTempL1;
+	hiprtSceneBuildInput sceneInputL1;
+	{
+		hiprtInstance instCircles;
+		instCircles.type	 = hiprtInstanceTypeGeometry;
+		instCircles.geometry = geomCircles;
+
+		hiprtInstance instTris;
+		instTris.type	  = hiprtInstanceTypeGeometry;
+		instTris.geometry = geomTris;
+
+		hiprtInstance instances[] = { instCircles, instTris };
+
+		sceneInputL1.instanceCount			   = 2;
+		sceneInputL1.instanceMasks			   = nullptr;
+		sceneInputL1.instanceTransformHeaders = nullptr;
+		malloc( reinterpret_cast<hiprtInstance*&>( sceneInputL1.instances ), sceneInputL1.instanceCount );
+		copyHtoD( reinterpret_cast<hiprtInstance*>( sceneInputL1.instances ), instances, sceneInputL1.instanceCount );
+
+		constexpr float Offset = 0.05f;
+		hiprtFrameSRT	frames[2];
+		frames[0].translation	 = { 0.0f, Offset, 0.0f };
+		frames[0].scale			 = { 1.0f, 1.0f, 1.0f };
+		frames[0].rotation		 = { 0.0f, 0.0f, 1.0f, 0.0f };
+		frames[1].translation	 = { 0.0f, -Offset, 0.0f };
+		frames[1].scale			 = { 1.0f, 1.0f, 1.0f };
+		frames[1].rotation		 = { 0.0f, 0.0f, 1.0f, 0.0f };
+		sceneInputL1.frameCount = 2;
+		malloc( reinterpret_cast<hiprtFrameSRT*&>( sceneInputL1.instanceFrames ), sceneInputL1.frameCount );
+		copyHtoD( reinterpret_cast<hiprtFrameSRT*>( sceneInputL1.instanceFrames ), frames, sceneInputL1.frameCount );
+
+		size_t			  sceneTempSize;
+		hiprtBuildOptions options;
+		options.buildFlags = hiprtBuildFlagBitPreferFastBuild;
+		checkHiprt( hiprtGetSceneBuildTemporaryBufferSize( ctxt, sceneInputL1, options, sceneTempSize ) );
+		malloc( reinterpret_cast<uint8_t*&>( sceneTempL1 ), sceneTempSize );
+
+		checkHiprt( hiprtCreateScene( ctxt, sceneInputL1, options, sceneL1 ) );
+		checkHiprt( hiprtBuildScene( ctxt, hiprtBuildOperationBuild, sceneInputL1, options, sceneTempL1, 0, sceneL1 ) );
+	}
+
+	// Level 2: single passthrough instance of sceneL1
+	hiprtScene			 sceneL2;
+	hiprtDevicePtr		 sceneTempL2;
+	hiprtSceneBuildInput sceneInputL2;
+	{
+		hiprtInstance inst;
+		inst.type  = hiprtInstanceTypeScene;
+		inst.scene = sceneL1;
+
+		sceneInputL2.instanceCount			   = 1;
+		sceneInputL2.instanceMasks			   = nullptr;
+		sceneInputL2.instanceTransformHeaders = nullptr;
+		malloc( reinterpret_cast<hiprtInstance*&>( sceneInputL2.instances ), sceneInputL2.instanceCount );
+		copyHtoD( reinterpret_cast<hiprtInstance*>( sceneInputL2.instances ), &inst, sceneInputL2.instanceCount );
+
+		hiprtFrameSRT frame;
+		frame.translation	 = { 0.0f, 0.0f, 0.0f };
+		frame.scale			 = { 1.0f, 1.0f, 1.0f };
+		frame.rotation		 = { 0.0f, 0.0f, 1.0f, 0.0f };
+		sceneInputL2.frameCount = 1;
+		malloc( reinterpret_cast<hiprtFrameSRT*&>( sceneInputL2.instanceFrames ), sceneInputL2.frameCount );
+		copyHtoD( reinterpret_cast<hiprtFrameSRT*>( sceneInputL2.instanceFrames ), &frame, sceneInputL2.frameCount );
+
+		size_t			  sceneTempSize;
+		hiprtBuildOptions options;
+		options.buildFlags = hiprtBuildFlagBitPreferFastBuild;
+		checkHiprt( hiprtGetSceneBuildTemporaryBufferSize( ctxt, sceneInputL2, options, sceneTempSize ) );
+		malloc( reinterpret_cast<uint8_t*&>( sceneTempL2 ), sceneTempSize );
+
+		checkHiprt( hiprtCreateScene( ctxt, sceneInputL2, options, sceneL2 ) );
+		checkHiprt( hiprtBuildScene( ctxt, hiprtBuildOperationBuild, sceneInputL2, options, sceneTempL2, 0, sceneL2 ) );
+	}
+
+	// Level 3: single passthrough instance of sceneL2
+	hiprtScene			 sceneL3;
+	hiprtDevicePtr		 sceneTempL3;
+	hiprtSceneBuildInput sceneInputL3;
+	{
+		hiprtInstance inst;
+		inst.type  = hiprtInstanceTypeScene;
+		inst.scene = sceneL2;
+
+		sceneInputL3.instanceCount			   = 1;
+		sceneInputL3.instanceMasks			   = nullptr;
+		sceneInputL3.instanceTransformHeaders = nullptr;
+		malloc( reinterpret_cast<hiprtInstance*&>( sceneInputL3.instances ), sceneInputL3.instanceCount );
+		copyHtoD( reinterpret_cast<hiprtInstance*>( sceneInputL3.instances ), &inst, sceneInputL3.instanceCount );
+
+		hiprtFrameSRT frame;
+		frame.translation	 = { 0.0f, 0.0f, 0.0f };
+		frame.scale			 = { 1.0f, 1.0f, 1.0f };
+		frame.rotation		 = { 0.0f, 0.0f, 1.0f, 0.0f };
+		sceneInputL3.frameCount = 1;
+		malloc( reinterpret_cast<hiprtFrameSRT*&>( sceneInputL3.instanceFrames ), sceneInputL3.frameCount );
+		copyHtoD( reinterpret_cast<hiprtFrameSRT*>( sceneInputL3.instanceFrames ), &frame, sceneInputL3.frameCount );
+
+		size_t			  sceneTempSize;
+		hiprtBuildOptions options;
+		options.buildFlags = hiprtBuildFlagBitPreferFastBuild;
+		checkHiprt( hiprtGetSceneBuildTemporaryBufferSize( ctxt, sceneInputL3, options, sceneTempSize ) );
+		malloc( reinterpret_cast<uint8_t*&>( sceneTempL3 ), sceneTempSize );
+
+		checkHiprt( hiprtCreateScene( ctxt, sceneInputL3, options, sceneL3 ) );
+		checkHiprt( hiprtBuildScene( ctxt, hiprtBuildOperationBuild, sceneInputL3, options, sceneTempL3, 0, sceneL3 ) );
+	}
+
+	// Level 4 (top): 2 instances of sceneL3 with Y offsets
+	hiprtScene			 sceneTop;
+	hiprtDevicePtr		 sceneTempTop;
+	hiprtSceneBuildInput sceneInputTop;
+	{
+		hiprtInstance instance;
+		instance.type  = hiprtInstanceTypeScene;
+		instance.scene = sceneL3;
+
+		hiprtInstance instances[] = { instance, instance };
+
+		sceneInputTop.instanceCount			   = 2;
+		sceneInputTop.instanceMasks			   = nullptr;
+		sceneInputTop.instanceTransformHeaders = nullptr;
+		malloc( reinterpret_cast<hiprtInstance*&>( sceneInputTop.instances ), sceneInputTop.instanceCount );
+		copyHtoD( reinterpret_cast<hiprtInstance*>( sceneInputTop.instances ), instances, sceneInputTop.instanceCount );
+
+		constexpr float Offset = 0.12f;
+		hiprtFrameSRT	frames[2];
+		frames[0].translation	 = { 0.0f, Offset, 0.0f };
+		frames[0].scale			 = { 1.0f, 1.0f, 1.0f };
+		frames[0].rotation		 = { 0.0f, 0.0f, 1.0f, 0.0f };
+		frames[1].translation	 = { 0.0f, -Offset, 0.0f };
+		frames[1].scale			 = { 1.0f, 1.0f, 1.0f };
+		frames[1].rotation		 = { 0.0f, 0.0f, 1.0f, 0.0f };
+		sceneInputTop.frameCount = 2;
+		malloc( reinterpret_cast<hiprtFrameSRT*&>( sceneInputTop.instanceFrames ), sceneInputTop.frameCount );
+		copyHtoD( reinterpret_cast<hiprtFrameSRT*>( sceneInputTop.instanceFrames ), frames, sceneInputTop.frameCount );
+
+		size_t			  sceneTempSize;
+		hiprtBuildOptions options;
+		options.buildFlags = hiprtBuildFlagBitPreferFastBuild;
+		checkHiprt( hiprtGetSceneBuildTemporaryBufferSize( ctxt, sceneInputTop, options, sceneTempSize ) );
+		malloc( reinterpret_cast<uint8_t*&>( sceneTempTop ), sceneTempSize );
+
+		checkHiprt( hiprtCreateScene( ctxt, sceneInputTop, options, sceneTop ) );
+		checkHiprt( hiprtBuildScene( ctxt, hiprtBuildOperationBuild, sceneInputTop, options, sceneTempTop, 0, sceneTop ) );
+	}
+
+	hiprtFuncNameSet funcNameSet;
+	funcNameSet.intersectFuncName			   = "intersectCircle";
+	std::vector<hiprtFuncNameSet> funcNameSets = { funcNameSet };
+
+	oroFunction func;
+
+	// note : precompiled bitcode path is not used for this test
+	if constexpr ( UseBitcode )
+		buildTraceKernelFromBitcode(
+			ctxt,
+			getRootDir() / "test/kernels/HiprtTestKernel.h",
+			"SceneIntersectionKernel4",
+			func,
+			std::nullopt,
+			funcNameSets,
+			1,
+			1 );
+	else
+		buildTraceKernel(
+			ctxt,
+			getRootDir() / "test/kernels/HiprtTestKernel.h",
+			"SceneIntersectionKernel4",
+			func,
+			std::nullopt,
+			funcNameSets,
+			1,
+			1 );
+
+	float* centers;
+	malloc( centers, 3 );
+	float h[] = { 0.25f, 0.5f, 0.75f };
+	copyHtoD( centers, h, 3 );
+
+	hiprtFuncDataSet funcDataSet;
+	funcDataSet.intersectFuncData = centers;
+
+	hiprtFuncTable funcTable;
+	checkHiprt( hiprtCreateFuncTable( ctxt, 1, 1, funcTable ) );
+	checkHiprt( hiprtSetFuncTable( ctxt, funcTable, 0, 0, funcDataSet ) );
+
+	uint8_t* dst;
+	malloc( dst, g_parsedArgs.m_ww * g_parsedArgs.m_wh * 4 );
+	memset( dst, 0, g_parsedArgs.m_ww * g_parsedArgs.m_wh * 4 );
+	uint2 res = { g_parsedArgs.m_ww, g_parsedArgs.m_wh };
+
+	void* args[] = { &sceneTop, &dst, &funcTable, &res };
+	launchKernel( func, g_parsedArgs.m_ww, g_parsedArgs.m_wh, args );
+	validateAndWriteImage( "SceneIntersectionMlas4.png", dst, "SceneIntersectionMlas4.png" );
+
+	free( sceneInputL1.instances );
+	free( sceneInputL1.instanceFrames );
+	free( sceneInputL2.instances );
+	free( sceneInputL2.instanceFrames );
+	free( sceneInputL3.instances );
+	free( sceneInputL3.instanceFrames );
+	free( sceneInputTop.instances );
+	free( sceneInputTop.instanceFrames );
+	free( mesh.vertices );
+	free( mesh.triangleIndices );
+	free( list.aabbs );
+	free( geomTempCircles );
+	free( geomTempTris );
+	free( sceneTempL1 );
+	free( sceneTempL2 );
+	free( sceneTempL3 );
+	free( sceneTempTop );
+	free( centers );
+	free( dst );
+	checkHiprt( hiprtDestroyFuncTable( ctxt, funcTable ) );
+	checkHiprt( hiprtDestroyGeometry( ctxt, geomTris ) );
+	checkHiprt( hiprtDestroyGeometry( ctxt, geomCircles ) );
+	checkHiprt( hiprtDestroyScene( ctxt, sceneL1 ) );
+	checkHiprt( hiprtDestroyScene( ctxt, sceneL2 ) );
+	checkHiprt( hiprtDestroyScene( ctxt, sceneL3 ) );
+	checkHiprt( hiprtDestroyScene( ctxt, sceneTop ) );
+	checkHiprt( hiprtDestroyContext( ctxt ) );
+}
+
 TEST_F( hiprtTest, Shear )
 {
 	hiprtContext ctxt;
